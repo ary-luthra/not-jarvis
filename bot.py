@@ -4,6 +4,7 @@ import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from openai import OpenAI
+from markdown_to_mrkdwn import SlackMarkdownConverter
 
 load_dotenv()
 
@@ -21,12 +22,15 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 SYSTEM_PROMPT = os.environ.get(
     "SYSTEM_PROMPT",
-    "You are a helpful assistant in a Slack workspace. Be concise and helpful.",
+    "You are a helpful assistant in a Slack workspace. Be concise and helpful. "
+    "Always format your responses using standard Markdown syntax "
+    "(e.g. **bold**, *italic*, [links](url), - bullet lists, ```code blocks```).",
 )
 
 # --- Clients ---
 app = App(token=SLACK_BOT_TOKEN)
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
+mrkdwn_converter = SlackMarkdownConverter()
 
 
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
@@ -98,7 +102,7 @@ def handle_mention(event, say):
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
     reply = chat(openai_messages)
-    say(text=reply, thread_ts=thread_ts)
+    say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
 @app.event("message")
@@ -120,7 +124,7 @@ def handle_dm(event, say):
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
     reply = chat(openai_messages)
-    say(text=reply, thread_ts=thread_ts)
+    say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
 if __name__ == "__main__":
