@@ -1,36 +1,17 @@
-import os
-from dotenv import load_dotenv
-import logging
-from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-from openai import OpenAI
-from markdown_to_mrkdwn import SlackMarkdownConverter
 
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --- Configuration ---
-# Slack tokens
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]  # xapp-... token for Socket Mode
-
-# OpenAI
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
-
-SYSTEM_PROMPT = os.environ.get(
-    "SYSTEM_PROMPT",
-    "You are a helpful assistant in a Slack workspace. Be concise and helpful. "
-    "Always format your responses using standard Markdown syntax "
-    "(e.g. **bold**, *italic*, [links](url), - bullet lists, ```code blocks```).",
+from config import (
+    SLACK_APP_TOKEN,
+    OPENAI_MODEL,
+    SYSTEM_PROMPT_OVERRIDE,
+    app,
+    openai_client,
+    mrkdwn_converter,
+    logger,
 )
+from prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
 
-# --- Clients ---
-app = App(token=SLACK_BOT_TOKEN)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-mrkdwn_converter = SlackMarkdownConverter()
+SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
 
 
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
