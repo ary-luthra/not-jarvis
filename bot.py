@@ -85,6 +85,12 @@ def chat(messages: list[dict]) -> str:
         input=input_messages,
         tools=[{"type": "web_search_preview"}],
     )
+
+    for item in response.output:
+        if item.type == "message":
+            continue
+        logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+
     return response.output_text
 
 
