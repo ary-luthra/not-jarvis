@@ -22,7 +22,9 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 SYSTEM_PROMPT = os.environ.get(
     "SYSTEM_PROMPT",
-    "You are a helpful assistant in a Slack workspace. Be concise and helpful.",
+    "You are a helpful assistant in a Slack workspace. Be concise and helpful. "
+    "Always format your responses using standard Markdown syntax "
+    "(e.g. **bold**, *italic*, [links](url), - bullet lists, ```code blocks```).",
 )
 
 # --- Clients ---
