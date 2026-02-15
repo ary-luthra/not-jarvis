@@ -60,12 +60,28 @@ def build_openai_messages(thread_messages: list[dict], bot_user_id: str) -> list
 
 
 def chat(messages: list[dict]) -> str:
-    """Send messages to OpenAI and return the response."""
-    response = openai_client.chat.completions.create(
+    """Send messages to OpenAI and return the response.
+
+    Uses the Responses API with web search so the model can look up
+    current information from the internet when the question needs it.
+    """
+    # The system prompt moves to the top-level `instructions` param.
+    # Everything else in the messages list stays in `input`.
+    system = None
+    input_messages = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system = msg["content"]
+        else:
+            input_messages.append(msg)
+
+    response = openai_client.responses.create(
         model=OPENAI_MODEL,
-        messages=messages,
+        instructions=system,
+        input=input_messages,
+        tools=[{"type": "web_search_preview"}],
     )
-    return response.choices[0].message.content
+    return response.output_text
 
 
 # --- Event Handlers ---
