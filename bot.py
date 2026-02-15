@@ -1,6 +1,6 @@
 import os
-from dotenv import load_dotenv
 import logging
+from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from openai import OpenAI
@@ -31,6 +31,7 @@ SYSTEM_PROMPT = os.environ.get(
 app = App(token=SLACK_BOT_TOKEN)
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 mrkdwn_converter = SlackMarkdownConverter()
+BOT_USER_ID = app.client.auth_test()["user_id"]
 
 
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
@@ -69,20 +70,10 @@ def chat(messages: list[dict]) -> str:
     Uses the Responses API with web search so the model can look up
     current information from the internet when the question needs it.
     """
-    # The system prompt moves to the top-level `instructions` param.
-    # Everything else in the messages list stays in `input`.
-    system = None
-    input_messages = []
-    for msg in messages:
-        if msg["role"] == "system":
-            system = msg["content"]
-        else:
-            input_messages.append(msg)
-
     response = openai_client.responses.create(
         model=OPENAI_MODEL,
-        instructions=system,
-        input=input_messages,
+        instructions=messages[0]["content"],
+        input=messages[1:],
         tools=[{"type": "web_search_preview"}],
     )
 
@@ -96,41 +87,34 @@ def chat(messages: list[dict]) -> str:
 
 # --- Event Handlers ---
 
-@app.event("app_mention")
-def handle_mention(event, say):
-    """Respond when the bot is @mentioned in a channel."""
+
+def reply_in_thread(event, say):
+    """Shared logic: fetch thread context, call OpenAI, and reply."""
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
-    bot_user_id = app.client.auth_test()["user_id"]
 
-    # Fetch thread history for context
     thread_messages = get_thread_messages(channel, thread_ts)
-    openai_messages = build_openai_messages(thread_messages, bot_user_id)
+    openai_messages = build_openai_messages(thread_messages, BOT_USER_ID)
 
     reply = chat(openai_messages)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
+
+
+@app.event("app_mention")
+def handle_mention(event, say):
+    """Respond when the bot is @mentioned in a channel."""
+    reply_in_thread(event, say)
 
 
 @app.event("message")
 def handle_dm(event, say):
     """Respond to direct messages."""
-    # Only handle DMs (channel type 'im'), ignore other message subtypes
     if event.get("channel_type") != "im" or event.get("subtype"):
         return
-
-    bot_user_id = app.client.auth_test()["user_id"]
-    # Don't respond to our own messages
-    if event.get("user") == bot_user_id:
+    if event.get("user") == BOT_USER_ID:
         return
 
-    channel = event["channel"]
-    thread_ts = event.get("thread_ts", event["ts"])
-
-    thread_messages = get_thread_messages(channel, thread_ts)
-    openai_messages = build_openai_messages(thread_messages, bot_user_id)
-
-    reply = chat(openai_messages)
-    say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
+    reply_in_thread(event, say)
 
 
 if __name__ == "__main__":
