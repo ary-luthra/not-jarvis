@@ -3,12 +3,15 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from config import (
     SLACK_APP_TOKEN,
     OPENAI_MODEL,
+    SYSTEM_PROMPT_OVERRIDE,
     app,
     openai_client,
     mrkdwn_converter,
     logger,
 )
-from prompts import SYSTEM_PROMPT
+from prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
+
+SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
 
 
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
