@@ -1,5 +1,3 @@
-import json
-
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from config import (
@@ -11,37 +9,11 @@ from config import (
     mrkdwn_converter,
     logger,
 )
-from memory import read_memory, save_memory
+from memory import read_memory
 from prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
+from tools import TOOLS, handle_function_calls
 
 SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
-
-SAVE_MEMORY_TOOL = {
-    "type": "function",
-    "name": "save_memory",
-    "description": (
-        "Save an important fact or preference about the user to long-term memory. "
-        "Use this when the user shares personal information, preferences, or any "
-        "detail worth remembering across conversations. Examples: where they live, "
-        "their job, their name, food preferences, etc."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "fact": {
-                "type": "string",
-                "description": "A concise fact about the user to remember",
-            }
-        },
-        "required": ["fact"],
-        "additionalProperties": False,
-    },
-}
-
-TOOLS = [
-    {"type": "web_search_preview"},
-    SAVE_MEMORY_TOOL,
-]
 
 
 def get_user_first_name(user_id: str) -> str:
@@ -97,26 +69,6 @@ def _build_instructions(user_id: str) -> str:
     return instructions
 
 
-def _handle_function_calls(response, user_id: str):
-    """Process any function-call outputs, execute them, and return tool outputs."""
-    tool_outputs = []
-    for item in response.output:
-        if item.type != "function_call":
-            continue
-        if item.name == "save_memory":
-            args = json.loads(item.arguments)
-            result = save_memory(user_id, args["fact"])
-            logger.info("Memory saved for %s: %s", user_id, args["fact"])
-        else:
-            result = f"Unknown function: {item.name}"
-        tool_outputs.append({
-            "type": "function_call_output",
-            "call_id": item.call_id,
-            "output": result,
-        })
-    return tool_outputs
-
-
 def chat(messages: list[dict], user_id: str) -> str:
     """Send messages to OpenAI and return the response.
 
@@ -142,7 +94,7 @@ def chat(messages: list[dict], user_id: str) -> str:
 
     # Handle function calls in a loop until the model produces a final text reply.
     while any(item.type == "function_call" for item in response.output):
-        tool_outputs = _handle_function_calls(response, user_id)
+        tool_outputs = handle_function_calls(response, user_id)
 
         # Log non-function-call items (e.g. web searches) as they happen.
         for item in response.output:
