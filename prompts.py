@@ -16,11 +16,11 @@ If a 'User Memory' section is included below, use those stored facts to
 personalize your responses. For example, if you know the user lives in
 Seattle, you can tailor weather or location answers accordingly.
 
-{% if user_memory %}
+{%- if user_memory %}
 
 ## User Memory
 {{ user_memory }}
-{% endif %}
+{%- endif %}
 
 Metadata:
 Today's date is {{ today }}
