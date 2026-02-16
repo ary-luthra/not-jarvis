@@ -1,3 +1,5 @@
+import json
+
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from config import (
@@ -9,9 +11,37 @@ from config import (
     mrkdwn_converter,
     logger,
 )
+from memory import read_memory, save_memory
 from prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
 
 SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
+
+SAVE_MEMORY_TOOL = {
+    "type": "function",
+    "name": "save_memory",
+    "description": (
+        "Save an important fact or preference about the user to long-term memory. "
+        "Use this when the user shares personal information, preferences, or any "
+        "detail worth remembering across conversations. Examples: where they live, "
+        "their job, their name, food preferences, etc."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact": {
+                "type": "string",
+                "description": "A concise fact about the user to remember",
+            }
+        },
+        "required": ["fact"],
+        "additionalProperties": False,
+    },
+}
+
+TOOLS = [
+    {"type": "web_search_preview"},
+    SAVE_MEMORY_TOOL,
+]
 
 
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
@@ -44,29 +74,76 @@ def build_openai_messages(thread_messages: list[dict], bot_user_id: str) -> list
     return openai_messages
 
 
-def chat(messages: list[dict]) -> str:
+def _build_instructions(user_id: str) -> str:
+    """Build the system instructions, injecting user memory if available."""
+    instructions = SYSTEM_PROMPT
+    user_memory = read_memory(user_id)
+    if user_memory:
+        instructions += f"\n\n## User Memory\n{user_memory}"
+    return instructions
+
+
+def _handle_function_calls(response, user_id: str):
+    """Process any function-call outputs, execute them, and return tool outputs."""
+    tool_outputs = []
+    for item in response.output:
+        if item.type != "function_call":
+            continue
+        if item.name == "save_memory":
+            args = json.loads(item.arguments)
+            result = save_memory(user_id, args["fact"])
+            logger.info("Memory saved for %s: %s", user_id, args["fact"])
+        else:
+            result = f"Unknown function: {item.name}"
+        tool_outputs.append({
+            "type": "function_call_output",
+            "call_id": item.call_id,
+            "output": result,
+        })
+    return tool_outputs
+
+
+def chat(messages: list[dict], user_id: str) -> str:
     """Send messages to OpenAI and return the response.
 
     Uses the Responses API with web search so the model can look up
     current information from the internet when the question needs it.
+    The model can also save facts about the user to long-term memory.
     """
     # The system prompt moves to the top-level `instructions` param.
     # Everything else in the messages list stays in `input`.
-    system = None
     input_messages = []
     for msg in messages:
-        if msg["role"] == "system":
-            system = msg["content"]
-        else:
+        if msg["role"] != "system":
             input_messages.append(msg)
+
+    instructions = _build_instructions(user_id)
 
     response = openai_client.responses.create(
         model=OPENAI_MODEL,
-        instructions=system,
+        instructions=instructions,
         input=input_messages,
-        tools=[{"type": "web_search_preview"}],
+        tools=TOOLS,
     )
 
+    # Handle function calls in a loop until the model produces a final text reply.
+    while any(item.type == "function_call" for item in response.output):
+        tool_outputs = _handle_function_calls(response, user_id)
+
+        # Log non-function-call items (e.g. web searches) as they happen.
+        for item in response.output:
+            if item.type in ("message", "function_call"):
+                continue
+            logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            previous_response_id=response.id,
+            input=tool_outputs,
+            tools=TOOLS,
+        )
+
+    # Log any remaining tool calls from the final response.
     for item in response.output:
         if item.type == "message":
             continue
@@ -82,13 +159,14 @@ def handle_mention(event, say):
     """Respond when the bot is @mentioned in a channel."""
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
+    user_id = event["user"]
     bot_user_id = app.client.auth_test()["user_id"]
 
     # Fetch thread history for context
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages)
+    reply = chat(openai_messages, user_id)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
@@ -106,11 +184,12 @@ def handle_dm(event, say):
 
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
+    user_id = event["user"]
 
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages)
+    reply = chat(openai_messages, user_id)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
