@@ -9,9 +9,25 @@ from config import (
     mrkdwn_converter,
     logger,
 )
+from memory import read_memory
 from prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
+from tools import TOOLS, handle_function_calls
 
 SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
+
+
+def get_user_first_name(user_id: str) -> str:
+    """Look up a Slack user's first name and return it lowercased."""
+    result = app.client.users_info(user=user_id)
+    first_name = result["user"]["profile"].get("first_name", "").strip()
+    if not first_name:
+        # Fall back to display name or real name if first_name is empty
+        first_name = (
+            result["user"]["profile"].get("display_name")
+            or result["user"]["profile"].get("real_name")
+            or user_id
+        )
+    return first_name.lower()
 
 
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
@@ -44,29 +60,56 @@ def build_openai_messages(thread_messages: list[dict], bot_user_id: str) -> list
     return openai_messages
 
 
-def chat(messages: list[dict]) -> str:
+def _build_instructions(user_id: str) -> str:
+    """Build the system instructions, injecting user memory if available."""
+    instructions = SYSTEM_PROMPT
+    user_memory = read_memory(user_id)
+    if user_memory:
+        instructions += f"\n\n## User Memory\n{user_memory}"
+    return instructions
+
+
+def chat(messages: list[dict], user_id: str) -> str:
     """Send messages to OpenAI and return the response.
 
     Uses the Responses API with web search so the model can look up
     current information from the internet when the question needs it.
+    The model can also save facts about the user to long-term memory.
     """
     # The system prompt moves to the top-level `instructions` param.
     # Everything else in the messages list stays in `input`.
-    system = None
     input_messages = []
     for msg in messages:
-        if msg["role"] == "system":
-            system = msg["content"]
-        else:
+        if msg["role"] != "system":
             input_messages.append(msg)
+
+    instructions = _build_instructions(user_id)
 
     response = openai_client.responses.create(
         model=OPENAI_MODEL,
-        instructions=system,
+        instructions=instructions,
         input=input_messages,
-        tools=[{"type": "web_search_preview"}],
+        tools=TOOLS,
     )
 
+    # Handle function calls in a loop until the model produces a final text reply.
+    while any(item.type == "function_call" for item in response.output):
+        tool_outputs = handle_function_calls(response, user_id)
+
+        # Log non-function-call items (e.g. web searches) as they happen.
+        for item in response.output:
+            if item.type in ("message", "function_call"):
+                continue
+            logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            previous_response_id=response.id,
+            input=tool_outputs,
+            tools=TOOLS,
+        )
+
+    # Log any remaining tool calls from the final response.
     for item in response.output:
         if item.type == "message":
             continue
@@ -82,13 +125,14 @@ def handle_mention(event, say):
     """Respond when the bot is @mentioned in a channel."""
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
+    username = get_user_first_name(event["user"])
     bot_user_id = app.client.auth_test()["user_id"]
 
     # Fetch thread history for context
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages)
+    reply = chat(openai_messages, username)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
@@ -106,11 +150,12 @@ def handle_dm(event, say):
 
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
+    username = get_user_first_name(event["user"])
 
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages)
+    reply = chat(openai_messages, username)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
