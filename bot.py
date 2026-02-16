@@ -44,6 +44,20 @@ TOOLS = [
 ]
 
 
+def get_user_first_name(user_id: str) -> str:
+    """Look up a Slack user's first name and return it lowercased."""
+    result = app.client.users_info(user=user_id)
+    first_name = result["user"]["profile"].get("first_name", "").strip()
+    if not first_name:
+        # Fall back to display name or real name if first_name is empty
+        first_name = (
+            result["user"]["profile"].get("display_name")
+            or result["user"]["profile"].get("real_name")
+            or user_id
+        )
+    return first_name.lower()
+
+
 def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
     """Fetch all messages in a Slack thread to use as conversation history."""
     result = app.client.conversations_replies(channel=channel, ts=thread_ts)
@@ -159,14 +173,14 @@ def handle_mention(event, say):
     """Respond when the bot is @mentioned in a channel."""
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
-    user_id = event["user"]
+    username = get_user_first_name(event["user"])
     bot_user_id = app.client.auth_test()["user_id"]
 
     # Fetch thread history for context
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages, user_id)
+    reply = chat(openai_messages, username)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
@@ -184,12 +198,12 @@ def handle_dm(event, say):
 
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
-    user_id = event["user"]
+    username = get_user_first_name(event["user"])
 
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages, user_id)
+    reply = chat(openai_messages, username)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
