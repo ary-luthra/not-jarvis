@@ -9,6 +9,7 @@ import json
 
 from config import logger
 from memory import save_memory
+from storage import list_notes, read_note, write_note, append_to_note
 
 # ---------------------------------------------------------------------------
 # Tool schemas
@@ -45,11 +46,101 @@ SAVE_MEMORY_TOOL = {
     },
 }
 
+LIST_NOTES_TOOL = {
+    "type": "function",
+    "name": "list_notes",
+    "description": (
+        "List all saved notes and lists by name. "
+        "Call this first when the user asks what's stored, or before reading a note "
+        "if you're not sure whether it exists."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+}
+
+READ_NOTE_TOOL = {
+    "type": "function",
+    "name": "read_note",
+    "description": (
+        "Read the full contents of a saved note or list by key. "
+        "Use this when the user asks to see a list or recall something stored."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "The name of the note (e.g. 'grocery_list', 'todo'). Use underscores, no spaces.",
+            }
+        },
+        "required": ["key"],
+        "additionalProperties": False,
+    },
+}
+
+WRITE_NOTE_TOOL = {
+    "type": "function",
+    "name": "write_note",
+    "description": (
+        "Write or completely overwrite a note or list. "
+        "Use this to create a new note or replace an existing one entirely. "
+        "For adding items to an existing list, use append_to_note instead."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "The name of the note. Use underscores, no spaces.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The full content to write.",
+            },
+        },
+        "required": ["key", "content"],
+        "additionalProperties": False,
+    },
+}
+
+APPEND_TO_NOTE_TOOL = {
+    "type": "function",
+    "name": "append_to_note",
+    "description": (
+        "Add content to the end of an existing note or list. "
+        "Use this when the user says 'add X to my grocery list' or similar. "
+        "Creates the note if it doesn't exist yet."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "The name of the note. Use underscores, no spaces.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The content to append (e.g. '- Milk').",
+            },
+        },
+        "required": ["key", "content"],
+        "additionalProperties": False,
+    },
+}
+
 # Master list passed to the OpenAI Responses API.
 # Hosted tools (like web_search_preview) go here alongside function tools.
 TOOLS = [
     {"type": "web_search_preview"},
     SAVE_MEMORY_TOOL,
+    LIST_NOTES_TOOL,
+    READ_NOTE_TOOL,
+    WRITE_NOTE_TOOL,
+    APPEND_TO_NOTE_TOOL,
 ]
 
 # ---------------------------------------------------------------------------
@@ -59,11 +150,21 @@ TOOLS = [
 
 def dispatch_function_call(name: str, arguments: str, username: str) -> str:
     """Execute a function tool by name and return the result string."""
+    args = json.loads(arguments) if arguments else {}
+
     if name == "save_memory":
-        args = json.loads(arguments)
         result = save_memory(username, args["fact"])
         logger.info("Memory saved for %s: %s", username, args["fact"])
         return result
+    if name == "list_notes":
+        return list_notes()
+    if name == "read_note":
+        return read_note(args["key"])
+    if name == "write_note":
+        return write_note(args["key"], args["content"])
+    if name == "append_to_note":
+        return append_to_note(args["key"], args["content"])
+
     return f"Unknown function: {name}"
 
 
