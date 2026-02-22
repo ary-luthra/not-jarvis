@@ -18,17 +18,26 @@ SAVE_MEMORY_TOOL = {
     "type": "function",
     "name": "save_memory",
     "description": (
-        "Save an important fact or preference about the user to long-term memory. "
-        "Use this when the user shares personal information, preferences, or any "
-        "detail worth remembering across conversations. Examples: where they live, "
-        "their job, their name, food preferences, etc."
+        "Save a fact about the user to long-term memory so it persists across conversations. "
+        "Call this whenever you learn something that would change how you'd respond to this "
+        "user in a future session.\n\n"
+        "CALL for: name, location, job, relationships, dietary restrictions, preferences, "
+        "recurring goals or habits, things they explicitly like or dislike.\n"
+        "DON'T CALL for: one-time requests, questions they asked, or anything that only "
+        "matters in this conversation.\n\n"
+        "If a new fact contradicts something already in memory (e.g. they moved cities), "
+        "save the new fact and note what it supersedes."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "fact": {
                 "type": "string",
-                "description": "A concise fact about the user to remember",
+                "description": (
+                    "A short declarative sentence. "
+                    "Good: 'Lives in Austin, TX' or 'Vegetarian'. "
+                    "Bad: 'The user told me they live in Austin' or 'User likes food'."
+                ),
             }
         },
         "required": ["fact"],
