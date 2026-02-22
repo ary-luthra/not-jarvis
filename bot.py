@@ -1,3 +1,5 @@
+import functools
+
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from config import (
@@ -16,6 +18,7 @@ from tools import TOOLS, handle_function_calls
 SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
 
 
+@functools.lru_cache(maxsize=128)
 def get_user_first_name(user_id: str) -> str:
     """Look up a Slack user's first name and return it lowercased."""
     result = app.client.users_info(user=user_id)
@@ -55,7 +58,8 @@ def build_openai_messages(thread_messages: list[dict], bot_user_id: str) -> list
         if msg.get("user") == bot_user_id or msg.get("bot_id"):
             openai_messages.append({"role": "assistant", "content": text})
         else:
-            openai_messages.append({"role": "user", "content": text})
+            name = get_user_first_name(msg["user"])
+            openai_messages.append({"role": "user", "content": f"[{name}]: {text}"})
 
     return openai_messages
 
