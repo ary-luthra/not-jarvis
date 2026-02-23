@@ -9,7 +9,7 @@ import json
 
 from config import logger
 from memory import save_memory
-from storage import list_notes, read_note, write_note, append_to_note, edit_note
+from storage import list_notes, read_note, write_note, append_to_note, edit_note, delete_note
 
 # ---------------------------------------------------------------------------
 # Tool schemas
@@ -133,6 +133,27 @@ APPEND_TO_NOTE_TOOL = {
     },
 }
 
+DELETE_NOTE_TOOL = {
+    "type": "function",
+    "name": "delete_note",
+    "description": (
+        "Permanently delete a saved file by key. "
+        "Use only when the user explicitly asks to delete or remove a note. "
+        "If unsure of the exact filename, call list_notes first."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "The filename including extension. No path separators.",
+            }
+        },
+        "required": ["key"],
+        "additionalProperties": False,
+    },
+}
+
 EDIT_NOTE_TOOL = {
     "type": "function",
     "name": "edit_note",
@@ -172,6 +193,7 @@ TOOLS = [
     READ_NOTE_TOOL,
     WRITE_NOTE_TOOL,
     APPEND_TO_NOTE_TOOL,
+    DELETE_NOTE_TOOL,
     EDIT_NOTE_TOOL,
 ]
 
@@ -196,6 +218,8 @@ def dispatch_function_call(name: str, arguments: str, username: str) -> str:
         return write_note(args["key"], args["content"])
     if name == "append_to_note":
         return append_to_note(args["key"], args["content"])
+    if name == "delete_note":
+        return delete_note(args["key"])
     if name == "edit_note":
         return edit_note(args["key"], args["old_str"], args["new_str"])
 

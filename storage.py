@@ -38,6 +38,14 @@ def append_to_note(key: str, content: str) -> str:
     return f"Appended to '{key}'."
 
 
+def delete_note(key: str) -> str:
+    path = _note_path(key)
+    if not path.exists():
+        return f"No note found for '{key}'."
+    path.unlink()
+    return f"Deleted '{key}'."
+
+
 def edit_note(key: str, old_str: str, new_str: str) -> str:
     path = _note_path(key)
     if not path.exists():
