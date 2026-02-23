@@ -25,23 +25,31 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 SYSTEM_PROMPT_OVERRIDE = os.environ.get("SYSTEM_PROMPT")
 
 # --- Opik (LLM observability) ---
-# Configure from env vars: OPIK_API_KEY, OPIK_WORKSPACE, OPIK_PROJECT_NAME
-# If OPIK_API_KEY is not set, Opik will run in no-op mode and tracing is skipped.
-if os.environ.get("OPIK_API_KEY"):
+# Enabled only when the --trace CLI flag is passed (which sets OPIK_TRACING_ENABLED=1).
+# Also requires OPIK_API_KEY to be set in the environment.
+OPIK_TRACING_ENABLED = (
+    os.environ.get("OPIK_TRACING_ENABLED") == "1"
+    and bool(os.environ.get("OPIK_API_KEY"))
+)
+
+if OPIK_TRACING_ENABLED:
     opik.configure(
         api_key=os.environ["OPIK_API_KEY"],
         workspace=os.environ.get("OPIK_WORKSPACE", "default"),
-        use_local=False,
     )
     logger.info("Opik tracing enabled (project: %s)", os.environ.get("OPIK_PROJECT_NAME", "not-jarvis"))
 
 # --- Clients ---
 app = App(token=SLACK_BOT_TOKEN)
 _base_openai_client = OpenAI(api_key=OPENAI_API_KEY)
-# Wrap with Opik to trace all responses.create() calls. If Opik is not
-# configured the wrapper is transparent and has no overhead.
-openai_client = track_openai(
-    _base_openai_client,
-    project_name=os.environ.get("OPIK_PROJECT_NAME", "not-jarvis"),
+# When tracing is enabled, wrap the client so every responses.create() call
+# is captured in Opik. Otherwise use the plain client with no overhead.
+openai_client = (
+    track_openai(
+        _base_openai_client,
+        project_name=os.environ.get("OPIK_PROJECT_NAME", "not-jarvis"),
+    )
+    if OPIK_TRACING_ENABLED
+    else _base_openai_client
 )
 mrkdwn_converter = SlackMarkdownConverter()
