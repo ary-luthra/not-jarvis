@@ -43,7 +43,10 @@ def edit_note(key: str, old_str: str, new_str: str) -> str:
     if not path.exists():
         return f"No note found for '{key}'."
     content = path.read_text()
-    if old_str not in content:
+    count = content.count(old_str)
+    if count == 0:
         return f"String not found in '{key}'. Read the file first to check exact contents."
+    if count > 1:
+        return f"Found {count} matches in '{key}'. Provide more surrounding context to make old_str unique."
     path.write_text(content.replace(old_str, new_str, 1))
     return f"Edited '{key}'."
