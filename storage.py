@@ -5,14 +5,16 @@ NOTES_DIR = Path(os.environ.get("NOTES_DIR", "notes"))
 
 
 def _note_path(key: str) -> Path:
-    return NOTES_DIR / f"{key}.md"
+    if "/" in key or "\\" in key or ".." in key:
+        raise ValueError(f"Invalid key: {key!r}")
+    return NOTES_DIR / key
 
 
 def list_notes() -> str:
     if not NOTES_DIR.exists():
         return "No notes yet."
-    keys = [p.stem for p in sorted(NOTES_DIR.glob("*.md"))]
-    return "\n".join(keys) if keys else "No notes yet."
+    files = sorted(p.name for p in NOTES_DIR.iterdir() if p.is_file())
+    return "\n".join(files) if files else "No notes yet."
 
 
 def read_note(key: str) -> str:

@@ -50,7 +50,7 @@ LIST_NOTES_TOOL = {
     "type": "function",
     "name": "list_notes",
     "description": (
-        "List all saved notes and lists by name. "
+        "List all saved notes and files by name (including their extensions). "
         "Call this first when the user asks what's stored, or before reading a note "
         "if you're not sure whether it exists."
     ),
@@ -66,7 +66,7 @@ READ_NOTE_TOOL = {
     "type": "function",
     "name": "read_note",
     "description": (
-        "Read the full contents of a saved note or list by key. "
+        "Read the full contents of a saved file by key (filename including extension). "
         "Use this when the user asks to see a list or recall something stored."
     ),
     "parameters": {
@@ -74,7 +74,7 @@ READ_NOTE_TOOL = {
         "properties": {
             "key": {
                 "type": "string",
-                "description": "The name of the note (e.g. 'grocery_list', 'todo'). Use underscores, no spaces.",
+                "description": "The filename including extension (e.g. 'grocery_list.md', 'reminders.json'). No path separators.",
             }
         },
         "required": ["key"],
@@ -86,16 +86,17 @@ WRITE_NOTE_TOOL = {
     "type": "function",
     "name": "write_note",
     "description": (
-        "Write or completely overwrite a note or list. "
-        "Use this to create a new note or replace an existing one entirely. "
-        "For adding items to an existing list, use append_to_note instead."
+        "Write or completely overwrite a file. "
+        "Choose the format and extension that best fits the data: "
+        ".md for prose or bullet lists, .json for structured records, .jsonl for append-heavy logs. "
+        "For adding to an existing file, use append_to_note instead."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "key": {
                 "type": "string",
-                "description": "The name of the note. Use underscores, no spaces.",
+                "description": "The filename including extension. No path separators.",
             },
             "content": {
                 "type": "string",
@@ -111,20 +112,20 @@ APPEND_TO_NOTE_TOOL = {
     "type": "function",
     "name": "append_to_note",
     "description": (
-        "Add content to the end of an existing note or list. "
-        "Use this when the user says 'add X to my grocery list' or similar. "
-        "Creates the note if it doesn't exist yet."
+        "Append content to the end of a file. "
+        "Use this when adding to an existing list or log (e.g. 'add milk to grocery list', new JSONL record). "
+        "Creates the file if it doesn't exist yet."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "key": {
                 "type": "string",
-                "description": "The name of the note. Use underscores, no spaces.",
+                "description": "The filename including extension. No path separators.",
             },
             "content": {
                 "type": "string",
-                "description": "The content to append (e.g. '- Milk').",
+                "description": "The content to append.",
             },
         },
         "required": ["key", "content"],
