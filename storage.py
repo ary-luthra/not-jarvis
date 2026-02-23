@@ -36,3 +36,14 @@ def append_to_note(key: str, content: str) -> str:
     with open(path, "a") as f:
         f.write(f"\n{content}")
     return f"Appended to '{key}'."
+
+
+def edit_note(key: str, old_str: str, new_str: str) -> str:
+    path = _note_path(key)
+    if not path.exists():
+        return f"No note found for '{key}'."
+    content = path.read_text()
+    if old_str not in content:
+        return f"String not found in '{key}'. Read the file first to check exact contents."
+    path.write_text(content.replace(old_str, new_str, 1))
+    return f"Edited '{key}'."

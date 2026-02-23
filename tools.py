@@ -9,7 +9,7 @@ import json
 
 from config import logger
 from memory import save_memory
-from storage import list_notes, read_note, write_note, append_to_note
+from storage import list_notes, read_note, write_note, append_to_note, edit_note
 
 # ---------------------------------------------------------------------------
 # Tool schemas
@@ -133,6 +133,36 @@ APPEND_TO_NOTE_TOOL = {
     },
 }
 
+EDIT_NOTE_TOOL = {
+    "type": "function",
+    "name": "edit_note",
+    "description": (
+        "Replace an exact string in a file with new text. "
+        "Use this for targeted edits: removing a list item, updating a value, renaming something. "
+        "To delete text, pass an empty string for new_str. "
+        "If old_str is not found, read the file first to verify the exact contents."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "The filename including extension. No path separators.",
+            },
+            "old_str": {
+                "type": "string",
+                "description": "The exact string to find and replace. Must match character-for-character.",
+            },
+            "new_str": {
+                "type": "string",
+                "description": "The string to replace it with. Pass empty string to delete.",
+            },
+        },
+        "required": ["key", "old_str", "new_str"],
+        "additionalProperties": False,
+    },
+}
+
 # Master list passed to the OpenAI Responses API.
 # Hosted tools (like web_search_preview) go here alongside function tools.
 TOOLS = [
@@ -142,6 +172,7 @@ TOOLS = [
     READ_NOTE_TOOL,
     WRITE_NOTE_TOOL,
     APPEND_TO_NOTE_TOOL,
+    EDIT_NOTE_TOOL,
 ]
 
 # ---------------------------------------------------------------------------
@@ -165,6 +196,8 @@ def dispatch_function_call(name: str, arguments: str, username: str) -> str:
         return write_note(args["key"], args["content"])
     if name == "append_to_note":
         return append_to_note(args["key"], args["content"])
+    if name == "edit_note":
+        return edit_note(args["key"], args["old_str"], args["new_str"])
 
     return f"Unknown function: {name}"
 
