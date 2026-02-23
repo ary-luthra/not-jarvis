@@ -5,17 +5,16 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from config import (
     SLACK_APP_TOKEN,
     OPENAI_MODEL,
-    SYSTEM_PROMPT_OVERRIDE,
     app,
     openai_client,
     mrkdwn_converter,
     logger,
 )
-from memory import read_memory
-from prompts import SYSTEM_PROMPT as DEFAULT_SYSTEM_PROMPT
-from tools import TOOLS, handle_function_calls
+import datetime
 
-SYSTEM_PROMPT = SYSTEM_PROMPT_OVERRIDE or DEFAULT_SYSTEM_PROMPT
+from memory import read_memory
+from prompts import SYSTEM_PROMPT_TEMPLATE
+from tools import TOOLS, handle_function_calls
 
 
 @functools.lru_cache(maxsize=128)
@@ -41,7 +40,7 @@ def get_thread_messages(channel: str, thread_ts: str) -> list[dict]:
 
 def build_openai_messages(thread_messages: list[dict], bot_user_id: str) -> list[dict]:
     """Convert Slack thread messages into OpenAI chat messages."""
-    openai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    openai_messages = []
 
     for msg in thread_messages:
         # Skip bot join messages, etc.
@@ -66,11 +65,10 @@ def build_openai_messages(thread_messages: list[dict], bot_user_id: str) -> list
 
 def _build_instructions(user_id: str) -> str:
     """Build the system instructions, injecting user memory if available."""
-    instructions = SYSTEM_PROMPT
-    user_memory = read_memory(user_id)
-    if user_memory:
-        instructions += f"\n\n## User Memory\n{user_memory}"
-    return instructions
+    return SYSTEM_PROMPT_TEMPLATE.render(
+        today=datetime.date.today().isoformat(),
+        user_memory=read_memory(user_id),
+    )
 
 
 def chat(messages: list[dict], user_id: str) -> str:
