@@ -19,7 +19,7 @@ SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]  # xapp-... token for Socket Mod
 
 # --- OpenAI ---
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
 
 # --- Prompt override ---
 # If set in the environment, override the default from prompts.py

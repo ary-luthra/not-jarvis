@@ -121,45 +121,39 @@ def chat(messages: list[dict], user_id: str, thread_id: str = None) -> str:
 
     instructions = _build_instructions(user_id)
 
-    response = openai_client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=instructions,
-        input=input_messages,
-        tools=TOOLS,
-    )
+    kwargs = dict(instructions=instructions, input=input_messages)
 
     # Handle function calls in a loop until the model produces a final text reply.
+    MAX_TURNS = 10
     turn_count = 0
-    while any(item.type == "function_call" for item in response.output):
-        turn_count += 1
+    for turn_count in range(1, MAX_TURNS + 1):
+        response = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            tools=TOOLS,
+            reasoning={"effort": "medium"},
+            **kwargs,
+        )
+
+        # Log detailed info about this turn
         logger.info("Agent turn %d: processing %d items in response.output",
                    turn_count, len(response.output))
         for item in response.output:
             logger.info("  - Item type: %s", item.type)
 
-        tool_outputs = handle_function_calls(response, user_id)
-
         # Log non-function-call items (e.g. web searches) as they happen.
         for item in response.output:
-            if item.type in ("message", "function_call"):
-                continue
-            logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+            if item.type not in ("message", "function_call"):
+                logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
 
-        response = openai_client.responses.create(
-            model=OPENAI_MODEL,
-            previous_response_id=response.id,
-            input=tool_outputs,
-            tools=TOOLS,
-        )
+        # Exit if no more function calls to process
+        if not any(item.type == "function_call" for item in response.output):
+            break
+
+        tool_outputs = handle_function_calls(response, user_id)
+        kwargs = dict(previous_response_id=response.id, input=tool_outputs)
 
     logger.info("Agent loop exited after %d turns. Final response has %d items.",
                turn_count, len(response.output))
-
-    # Log any remaining tool calls from the final response.
-    for item in response.output:
-        if item.type == "message":
-            continue
-        logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
 
     return response.output_text
 
