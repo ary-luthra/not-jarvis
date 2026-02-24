@@ -107,37 +107,22 @@ def chat(messages: list[dict], user_id: str) -> str:
 
     instructions = _build_instructions(user_id)
 
-    response = openai_client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=instructions,
-        input=input_messages,
-        tools=TOOLS,
-        reasoning={"effort": "medium"},
-    )
+    kwargs = dict(instructions=instructions, input=input_messages)
 
-    # Handle function calls in a loop until the model produces a final text reply.
-    while any(item.type == "function_call" for item in response.output):
-        tool_outputs = handle_function_calls(response, user_id)
-
-        # Log non-function-call items (e.g. web searches) as they happen.
-        for item in response.output:
-            if item.type in ("message", "function_call"):
-                continue
-            logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
-
+    while True:
         response = openai_client.responses.create(
             model=OPENAI_MODEL,
-            previous_response_id=response.id,
-            input=tool_outputs,
             tools=TOOLS,
             reasoning={"effort": "medium"},
+            **kwargs,
         )
-
-    # Log any remaining tool calls from the final response.
-    for item in response.output:
-        if item.type == "message":
-            continue
-        logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+        for item in response.output:
+            if item.type not in ("message", "function_call"):
+                logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+        if not any(item.type == "function_call" for item in response.output):
+            break
+        tool_outputs = handle_function_calls(response, user_id)
+        kwargs = dict(previous_response_id=response.id, input=tool_outputs)
 
     return response.output_text
 
