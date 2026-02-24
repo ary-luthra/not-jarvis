@@ -109,7 +109,8 @@ def chat(messages: list[dict], user_id: str) -> str:
 
     kwargs = dict(instructions=instructions, input=input_messages)
 
-    while True:
+    MAX_TURNS = 10
+    for _ in range(MAX_TURNS):
         response = openai_client.responses.create(
             model=OPENAI_MODEL,
             tools=TOOLS,
