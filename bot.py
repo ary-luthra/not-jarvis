@@ -1,4 +1,24 @@
+import argparse
 import functools
+import os
+import sys
+
+# --- CLI flags must be parsed before any local imports so that env vars are
+#     set before config.py (and its module-level side-effects) are executed. ---
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="not-jarvis Slack bot")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Enable Opik LLM call tracing (requires OPIK_API_KEY to be set)",
+    )
+    # parse_known_args so that Slack Bolt / pytest flags don't cause errors
+    args, _ = parser.parse_known_args()
+    return args
+
+_args = _parse_args()
+if _args.trace:
+    os.environ["OPIK_TRACING_ENABLED"] = "1"
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -162,6 +182,6 @@ def handle_dm(event, say):
 
 
 if __name__ == "__main__":
-    logger.info("Starting bot...")
+    logger.info("Starting bot... (tracing=%s)", _args.trace)
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
