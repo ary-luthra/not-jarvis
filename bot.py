@@ -112,6 +112,7 @@ def chat(messages: list[dict], user_id: str) -> str:
         instructions=instructions,
         input=input_messages,
         tools=TOOLS,
+        reasoning={"effort": "medium"},
     )
 
     # Handle function calls in a loop until the model produces a final text reply.
@@ -129,6 +130,7 @@ def chat(messages: list[dict], user_id: str) -> str:
             previous_response_id=response.id,
             input=tool_outputs,
             tools=TOOLS,
+            reasoning={"effort": "medium"},
         )
 
     # Log any remaining tool calls from the final response.
