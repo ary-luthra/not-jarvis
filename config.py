@@ -6,6 +6,7 @@ from openai import OpenAI
 from markdown_to_mrkdwn import SlackMarkdownConverter
 import opik
 from opik.integrations.openai import track_openai
+from typing import Optional
 
 load_dotenv()
 

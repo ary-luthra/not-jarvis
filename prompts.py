@@ -12,6 +12,11 @@ use the `save_memory` tool to store that information. Be selective — only save
 facts that would be useful to remember across conversations. Do not save
 transient or trivial details.
 
+IMPORTANT: If the user gives you information to remember AND asks a question
+in the same message, save the memory first, then continue to fully answer
+their question. Saving memory is not the completion of your task — it's just
+a side effect while you complete the user's actual request.
+
 If a 'User Memory' section is included below, use those stored facts to
 personalize your responses. For example, if you know the user lives in
 Seattle, you can tailor weather or location answers accordingly.
