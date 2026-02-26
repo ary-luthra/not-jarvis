@@ -31,6 +31,7 @@ from config import (
     logger,
 )
 import datetime
+import opik
 
 from memory import read_memory
 from prompts import SYSTEM_PROMPT_TEMPLATE
@@ -91,13 +92,26 @@ def _build_instructions(user_id: str) -> str:
     )
 
 
-def chat(messages: list[dict], user_id: str) -> str:
+@opik.track(name="agent_conversation_turn", tags=["slack-bot"])
+def chat(messages: list[dict], user_id: str, thread_id: str = None) -> str:
     """Send messages to OpenAI and return the response.
 
     Uses the Responses API with web search so the model can look up
     current information from the internet when the question needs it.
     The model can also save facts about the user to long-term memory.
     """
+    # Add metadata to the trace (no-op if tracing is disabled)
+    try:
+        metadata = {"user_id": user_id, "message_count": len(messages)}
+        if thread_id:
+            metadata["thread_id"] = thread_id
+        opik.update_current_trace(
+            tags=[f"user:{user_id}"],
+            metadata=metadata,
+        )
+    except Exception:
+        pass  # Silently ignore if tracing is not configured
+
     # The system prompt moves to the top-level `instructions` param.
     # Everything else in the messages list stays in `input`.
     input_messages = []
@@ -109,21 +123,37 @@ def chat(messages: list[dict], user_id: str) -> str:
 
     kwargs = dict(instructions=instructions, input=input_messages)
 
+    # Handle function calls in a loop until the model produces a final text reply.
     MAX_TURNS = 10
-    for _ in range(MAX_TURNS):
+    turn_count = 0
+    for turn_count in range(1, MAX_TURNS + 1):
         response = openai_client.responses.create(
             model=OPENAI_MODEL,
             tools=TOOLS,
             reasoning={"effort": "medium"},
             **kwargs,
         )
+
+        # Log detailed info about this turn
+        logger.info("Agent turn %d: processing %d items in response.output",
+                   turn_count, len(response.output))
+        for item in response.output:
+            logger.info("  - Item type: %s", item.type)
+
+        # Log non-function-call items (e.g. web searches) as they happen.
         for item in response.output:
             if item.type not in ("message", "function_call"):
                 logger.info("Tool call: %s | Params: %s", item.type, item.model_dump_json())
+
+        # Exit if no more function calls to process
         if not any(item.type == "function_call" for item in response.output):
             break
+
         tool_outputs = handle_function_calls(response, user_id)
         kwargs = dict(previous_response_id=response.id, input=tool_outputs)
+
+    logger.info("Agent loop exited after %d turns. Final response has %d items.",
+               turn_count, len(response.output))
 
     return response.output_text
 
@@ -142,7 +172,7 @@ def handle_mention(event, say):
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages, username)
+    reply = chat(openai_messages, username, thread_id=thread_ts)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
@@ -165,7 +195,7 @@ def handle_dm(event, say):
     thread_messages = get_thread_messages(channel, thread_ts)
     openai_messages = build_openai_messages(thread_messages, bot_user_id)
 
-    reply = chat(openai_messages, username)
+    reply = chat(openai_messages, username, thread_id=thread_ts)
     say(text=mrkdwn_converter.convert(reply), thread_ts=thread_ts)
 
 
