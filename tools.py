@@ -8,7 +8,7 @@ import json
 
 from config import logger
 from memory import save_memory
-from file_storage import list_notes, read_note, write_note, append_to_note, edit_note, delete_note
+from session_manager import session_manager
 from tool_schemas import TOOLS  # noqa: F401  re-exported for bot.py
 
 # ---------------------------------------------------------------------------
@@ -29,18 +29,27 @@ def dispatch_function_call(name: str, arguments: str, username: str) -> str:
             result = save_memory(username, args["fact"])
             logger.info("Memory saved for %s: %s", username, args["fact"])
             return result
-        if name == "list_notes":
-            return list_notes()
-        if name == "read_note":
-            return read_note(args["key"])
-        if name == "write_note":
-            return write_note(args["key"], args["content"])
-        if name == "append_to_note":
-            return append_to_note(args["key"], args["content"])
-        if name == "delete_note":
-            return delete_note(args["key"])
-        if name == "edit_note":
-            return edit_note(args["key"], args["old_str"], args["new_str"])
+        if name == "dispatch_computer_task":
+            session = session_manager.dispatch(
+                task=args["task"],
+                use_browser=args.get("use_browser", False),
+                isolate=args.get("isolate", False),
+            )
+            logger.info("Dispatched session %s for: %s", session.internal_id, args["task"][:80])
+            return json.dumps({
+                "session_id": session.internal_id,
+                "status": "dispatched",
+                "message": f"Task dispatched as {session.internal_id}. Use read_task_output to check progress.",
+            })
+        if name == "list_computer_tasks":
+            sessions = session_manager.list_sessions()
+            if not sessions:
+                return "No computer tasks have been dispatched yet."
+            return json.dumps(sessions, indent=2)
+        if name == "read_task_output":
+            return session_manager.read_output(args["session_id"])
+        if name == "send_followup_to_task":
+            return session_manager.send_followup(args["session_id"], args["message"])
     except KeyError as e:
         logger.error("Missing required argument for %s: %s", name, e)
         return f"Error: missing required argument {e}"
