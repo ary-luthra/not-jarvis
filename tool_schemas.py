@@ -37,13 +37,60 @@ SAVE_MEMORY_TOOL = {
     },
 }
 
-LIST_NOTES_TOOL = {
+# ---------------------------------------------------------------------------
+# Computer task dispatch (Claude Code sessions)
+# ---------------------------------------------------------------------------
+
+DISPATCH_COMPUTER_TASK_TOOL = {
     "type": "function",
-    "name": "list_notes",
+    "name": "dispatch_computer_task",
     "description": (
-        "List all saved notes and files by name (including their extensions). "
-        "Call this first when the user asks what's stored, or before reading a note "
-        "if you're not sure whether it exists."
+        "Dispatch a task to a Claude Code session running on this computer. "
+        "This runs in the background — acknowledge the dispatch to the user and move on. "
+        "Do NOT poll or wait for results. Only check on it later if the user asks.\n\n"
+        "Use this for tasks that require interacting with the computer: "
+        "running shell commands, editing files, or browser actions.\n\n"
+        "For multiple independent tasks, call this multiple times — they run in parallel.\n"
+        "Set use_browser=true ONLY for tasks that require real browser interaction "
+        "(logging into websites, clicking buttons, filling forms, taking screenshots). "
+        "Do NOT use browser for simple information lookups — Claude Code has web search built in.\n"
+        "Set isolate=true for file-editing tasks that might conflict with each other."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "A clear description of what to do on the computer.",
+            },
+            "use_browser": {
+                "type": "boolean",
+                "description": (
+                    "Whether the task needs a real Chrome browser. "
+                    "Use for: logging into sites, clicking UI, filling forms, screenshotting pages. "
+                    "Do NOT use for simple lookups — use web_search_preview instead."
+                ),
+                "default": False,
+            },
+            "isolate": {
+                "type": "boolean",
+                "description": "Whether to use a git worktree for file isolation.",
+                "default": False,
+            },
+        },
+        "required": ["task"],
+        "additionalProperties": False,
+    },
+}
+
+LIST_COMPUTER_TASKS_TOOL = {
+    "type": "function",
+    "name": "list_computer_tasks",
+    "description": (
+        "List all Claude Code sessions (running, completed, or failed) "
+        "with their status, age, and task description. "
+        "Call this when the user asks about the status of their tasks, "
+        "or before dispatching to see what's already running."
     ),
     "parameters": {
         "type": "object",
@@ -53,124 +100,52 @@ LIST_NOTES_TOOL = {
     },
 }
 
-READ_NOTE_TOOL = {
+READ_TASK_OUTPUT_TOOL = {
     "type": "function",
-    "name": "read_note",
+    "name": "read_task_output",
     "description": (
-        "Read the full contents of a saved file by key (filename including extension). "
-        "Use this when the user asks to see a list or recall something stored."
+        "Read the output of a Claude Code session so far. "
+        "This is a FREE passive peek — it reads captured stdout without "
+        "interacting with the session or costing any tokens.\n\n"
+        "Use this to check on progress, see what tool calls were made, "
+        "or get the final result of a completed session."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "key": {
+            "session_id": {
                 "type": "string",
-                "description": "The filename including extension (e.g. 'grocery_list.md', 'reminders.json'). No path separators.",
-            }
+                "description": "The session ID returned by dispatch_computer_task (e.g. 'task-1').",
+            },
         },
-        "required": ["key"],
+        "required": ["session_id"],
         "additionalProperties": False,
     },
 }
 
-WRITE_NOTE_TOOL = {
+SEND_FOLLOWUP_TO_TASK_TOOL = {
     "type": "function",
-    "name": "write_note",
+    "name": "send_followup_to_task",
     "description": (
-        "Write or completely overwrite a file. "
-        "Choose the format and extension that best fits the data: "
-        ".md for prose or bullet lists, .json for structured records, .jsonl for append-heavy logs. "
-        "For adding to an existing file, use append_to_note instead."
+        "Send a follow-up message to a COMPLETED Claude Code session, "
+        "resuming it with new instructions. This starts a new turn and costs tokens.\n\n"
+        "Use only when you need to redirect, add instructions, or ask for more work. "
+        "To just peek at output, use read_task_output instead.\n\n"
+        "Cannot be used on sessions that are still running."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "key": {
+            "session_id": {
                 "type": "string",
-                "description": "The filename including extension. No path separators.",
+                "description": "The session ID (e.g. 'task-1').",
             },
-            "content": {
+            "message": {
                 "type": "string",
-                "description": "The full content to write.",
-            },
-        },
-        "required": ["key", "content"],
-        "additionalProperties": False,
-    },
-}
-
-APPEND_TO_NOTE_TOOL = {
-    "type": "function",
-    "name": "append_to_note",
-    "description": (
-        "Append content to the end of a file. "
-        "Use this when adding to an existing list or log (e.g. 'add milk to grocery list', new JSONL record). "
-        "Creates the file if it doesn't exist yet."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "key": {
-                "type": "string",
-                "description": "The filename including extension. No path separators.",
-            },
-            "content": {
-                "type": "string",
-                "description": "The content to append.",
+                "description": "The follow-up instruction to send.",
             },
         },
-        "required": ["key", "content"],
-        "additionalProperties": False,
-    },
-}
-
-DELETE_NOTE_TOOL = {
-    "type": "function",
-    "name": "delete_note",
-    "description": (
-        "Permanently delete a saved file by key. "
-        "Use only when the user explicitly asks to delete or remove a note. "
-        "If unsure of the exact filename, call list_notes first."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "key": {
-                "type": "string",
-                "description": "The filename including extension. No path separators.",
-            }
-        },
-        "required": ["key"],
-        "additionalProperties": False,
-    },
-}
-
-EDIT_NOTE_TOOL = {
-    "type": "function",
-    "name": "edit_note",
-    "description": (
-        "Replace an exact string in a file with new text. "
-        "Use this for targeted edits: removing a list item, updating a value, renaming something. "
-        "To delete text, pass an empty string for new_str. "
-        "If old_str is not found, read the file first to verify the exact contents."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "key": {
-                "type": "string",
-                "description": "The filename including extension. No path separators.",
-            },
-            "old_str": {
-                "type": "string",
-                "description": "The exact string to find and replace. Must match character-for-character.",
-            },
-            "new_str": {
-                "type": "string",
-                "description": "The string to replace it with. Pass empty string to delete.",
-            },
-        },
-        "required": ["key", "old_str", "new_str"],
+        "required": ["session_id", "message"],
         "additionalProperties": False,
     },
 }
@@ -180,10 +155,8 @@ EDIT_NOTE_TOOL = {
 TOOLS = [
     {"type": "web_search_preview"},
     SAVE_MEMORY_TOOL,
-    LIST_NOTES_TOOL,
-    READ_NOTE_TOOL,
-    WRITE_NOTE_TOOL,
-    APPEND_TO_NOTE_TOOL,
-    DELETE_NOTE_TOOL,
-    EDIT_NOTE_TOOL,
+    DISPATCH_COMPUTER_TASK_TOOL,
+    LIST_COMPUTER_TASKS_TOOL,
+    READ_TASK_OUTPUT_TOOL,
+    SEND_FOLLOWUP_TO_TASK_TOOL,
 ]
