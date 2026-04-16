@@ -1,13 +1,14 @@
 """Entry point: run the voice pipeline from the terminal.
 
 Usage:
-    python -m robot.main                  # text input mode
-    python -m robot.main --voice          # voice input mode (TODO: phase 2)
+    python -m robot.main                  # voice mode (default — mic → Whisper → chat)
+    python -m robot.main --text           # text mode (type to chat)
     python -m robot.main --debug          # verbose logging
 """
 
 import argparse
 import logging
+import signal
 import time
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from robot.orchestrator import Orchestrator
 
 
 def text_loop(orch: Orchestrator):
+    """Type messages, hear them spoken."""
     print("\nType a message (or 'quit' to exit):\n")
     while True:
         try:
@@ -45,21 +47,40 @@ def text_loop(orch: Orchestrator):
         time.sleep(1)
 
 
+def voice_loop(orch: Orchestrator):
+    """Listener handles everything — just keep the main thread alive."""
+    print("\nListening... speak to chat. Press Ctrl+C to exit.\n")
+    stop = False
+
+    def handle_sigint(sig, frame):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    while not stop:
+        time.sleep(0.5)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Reachy Mini voice pipeline")
-    parser.add_argument("--voice", action="store_true", help="Use mic input (TODO)")
+    parser.add_argument("--text", action="store_true", help="Type input instead of mic")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    mode = "Text" if args.text else "Voice"
     print("=" * 50)
-    print("  Robot Voice Pipeline")
+    print(f"  Robot Voice Pipeline [{mode} mode]")
     print("=" * 50)
 
-    with Orchestrator() as orch:
-        text_loop(orch)
+    with Orchestrator(text_mode=args.text) as orch:
+        if args.text:
+            text_loop(orch)
+        else:
+            voice_loop(orch)
 
     print("\nGoodbye!")
 

@@ -1,6 +1,10 @@
-"""AudioPlayer component: plays TimedAudio, emits sync markers and buffer status."""
+"""AudioPlayer component: plays TimedAudio, emits sync markers and buffer status.
+
+On interruption (StateChange("listening")), stops playback and clears queue.
+"""
 
 import logging
+import threading
 import time
 from queue import Empty
 
@@ -22,9 +26,11 @@ class AudioPlayer(Component):
         state_out: Bus,
         buffer_out: Bus,
         marker_out: Bus,
+        state_in: Bus,
     ):
         super().__init__("audio_player")
         self._audio_q = audio_in.subscribe()
+        self._state_q = state_in.subscribe()
         self.state_out = state_out
         self.buffer_out = buffer_out
         self.marker_out = marker_out
@@ -32,14 +38,29 @@ class AudioPlayer(Component):
         self._current_rate = None
         self._total_samples = 0
         self._playback_start = None
+        self._interrupted = threading.Event()
 
     def run(self):
+        # Watch for interrupts in background
+        interrupt_thread = threading.Thread(target=self._watch_state, daemon=True)
+        interrupt_thread.start()
+
         current_chunk_id = None
 
         while self.running:
+            # Check for interrupt
+            if self._interrupted.is_set():
+                self._handle_interrupt()
+                current_chunk_id = None
+                self._interrupted.clear()
+                continue
+
             try:
                 item = self._audio_q.get(timeout=0.1)
             except Empty:
+                continue
+
+            if self._interrupted.is_set():
                 continue
 
             if isinstance(item, EndOfResponse):
@@ -53,7 +74,6 @@ class AudioPlayer(Component):
             if not isinstance(item, TimedAudio):
                 continue
 
-            # New chunk — emit playback marker and buffer status
             if item.chunk_id != current_chunk_id:
                 current_chunk_id = item.chunk_id
                 self.state_out.put(StateChange(state="speaking"))
@@ -63,22 +83,34 @@ class AudioPlayer(Component):
                         wall_time_started=time.time(),
                     )
                 )
-                # Report buffer depth
                 depth = self._audio_q.qsize()
-                remaining = self._estimate_remaining()
-                self.buffer_out.put(BufferStatus(depth=depth, seconds_remaining=remaining))
+                self.buffer_out.put(BufferStatus(depth=depth, seconds_remaining=0))
                 logger.debug(f"[audio] playing chunk {item.chunk_id} (buf={depth})")
 
             self._play(item)
 
-    def _estimate_remaining(self) -> float:
-        """Estimate seconds of audio remaining in playback buffer."""
-        if not self._current_rate or not self._playback_start:
-            return 0
-        total_duration = self._total_samples / self._current_rate
-        elapsed = time.time() - self._playback_start
-        remaining = total_duration - elapsed
-        return max(0, remaining)
+    def _watch_state(self):
+        while self.running:
+            try:
+                event = self._state_q.get(timeout=0.1)
+            except Empty:
+                continue
+            if isinstance(event, StateChange) and event.state == "listening":
+                self._interrupted.set()
+                logger.debug("[audio] interrupt signal received")
+
+    def _handle_interrupt(self):
+        """Stop playback and clear queued audio."""
+        logger.info("[audio] interrupted — stopping playback")
+        self._close_stream()
+        # Drain the audio queue
+        while not self._audio_q.empty():
+            try:
+                self._audio_q.get_nowait()
+            except Empty:
+                break
+        self._total_samples = 0
+        self._playback_start = None
 
     def _play(self, item: TimedAudio):
         audio = np.frombuffer(item.audio, dtype=np.int16).astype(np.float32) / 32767
