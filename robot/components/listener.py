@@ -44,12 +44,10 @@ class Listener(Component):
         self,
         state_bus: Bus,
         input_bus: Bus,
-        audio_bus: Bus,
         whisper_model_size: str = "base.en",
     ):
         super().__init__("listener")
         self._state_q = state_bus.subscribe()
-        self._audio_q = audio_bus.subscribe()  # for future hotword/AEC use
         self.state_bus = state_bus
         self.input_bus = input_bus
         self._current_state = "idle"
@@ -81,7 +79,6 @@ class Listener(Component):
             if self._current_state == "speaking":
                 # Mute — skip VAD to avoid hearing ourselves
                 # TODO: add hotword detection ("stop", "hey") here
-                self._drain_audio_bus()
                 time.sleep(0.1)
                 continue
 
@@ -109,11 +106,6 @@ class Listener(Component):
             event = self._state_q.get()
             if isinstance(event, StateChange):
                 self._current_state = event.state
-
-    def _drain_audio_bus(self):
-        """Discard audio bus items (not used yet, prevents queue buildup)."""
-        while not self._audio_q.empty():
-            self._audio_q.get()
 
     def _record_until_silence(self) -> np.ndarray | None:
         audio_q = stdlib_queue.Queue()

@@ -58,7 +58,6 @@ class Orchestrator:
             self.listener = Listener(
                 state_bus=self.state_bus,
                 input_bus=self.input_bus,
-                audio_bus=self.audio_bus,
             )
             self._components.append(self.listener)
 
