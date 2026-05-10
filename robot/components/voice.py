@@ -108,6 +108,15 @@ class Voice(Component):
                 with lock:
                     chunk_queues.append(cq)
                 pool.submit(self._synthesize_to_queue, chunk, cq)
+            elif chunk.is_final and not self._interrupted.is_set():
+                self.audio_bus.put(
+                    TimedAudio(
+                        audio=b"",
+                        sample_rate=16000,
+                        chunk_id=chunk.chunk_id,
+                        is_final=True,
+                    )
+                )
 
             if chunk.is_final:
                 pool.shutdown(wait=True)
@@ -145,6 +154,15 @@ class Voice(Component):
                         )
                     )
             if not self._interrupted.is_set():
+                if chunk.is_final:
+                    cq.put(
+                        TimedAudio(
+                            audio=b"",
+                            sample_rate=16000,
+                            chunk_id=chunk.chunk_id,
+                            is_final=True,
+                        )
+                    )
                 logger.debug(f"[voice] synthesized: {chunk.text[:60]}...")
         except Exception:
             logger.exception(f"[voice] TTS failed for chunk {chunk.chunk_id}")

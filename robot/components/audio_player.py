@@ -42,6 +42,7 @@ class AudioPlayer(Component):
         self._playback_start = None
         self._interrupted = threading.Event()
         self._is_speaking = False
+        self._final_audio_seen = False
 
     def run(self):
         interrupt_thread = threading.Thread(target=self._watch_state, daemon=True)
@@ -63,10 +64,12 @@ class AudioPlayer(Component):
                 if self._is_speaking:
                     self._drain()
                     self._is_speaking = False
-                    self.state_bus.put(StateChange(state="idle"))
+                    next_state = "idle" if self._final_audio_seen else "thinking"
+                    self.state_bus.put(StateChange(state=next_state))
                     self.buffer_bus.put(BufferStatus(depth=0, seconds_remaining=0))
                     current_chunk_id = None
-                    logger.debug("[audio] idle")
+                    self._final_audio_seen = False
+                    logger.debug(f"[audio] {next_state}")
                 continue
 
             if self._interrupted.is_set():
@@ -75,11 +78,19 @@ class AudioPlayer(Component):
             if not isinstance(item, TimedAudio):
                 continue
 
+            if item.is_final:
+                self._final_audio_seen = True
+                if not self._is_speaking:
+                    self.state_bus.put(StateChange(state="idle"))
+                    self._final_audio_seen = False
+                continue
+
             # First audio or new chunk — emit markers
             if item.chunk_id != current_chunk_id:
                 current_chunk_id = item.chunk_id
                 if not self._is_speaking:
                     self._is_speaking = True
+                    self._final_audio_seen = False
                     self.state_bus.put(StateChange(state="speaking"))
                 self.marker_bus.put(
                     PlaybackMarker(
@@ -114,6 +125,7 @@ class AudioPlayer(Component):
                 break
         self._total_samples = 0
         self._playback_start = None
+        self._final_audio_seen = False
 
     def _play(self, item: TimedAudio):
         audio = np.frombuffer(item.audio, dtype=np.int16).astype(np.float32) / 32767
