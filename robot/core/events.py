@@ -41,7 +41,7 @@ class PlaybackMarker:
 @dataclass
 class StateChange:
     """Pipeline state transition."""
-    state: Literal["idle", "listening", "thinking", "speaking"]
+    state: Literal["idle", "listening", "thinking", "speaking", "interrupted"]
 
 
 @dataclass

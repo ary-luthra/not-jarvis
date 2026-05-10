@@ -1,25 +1,35 @@
 """Brain component: streams Claude responses, chunks text, handles tool calls.
 
 Chunking strategy based on audio buffer depth (PCM fragment count):
-  - <50 fragments: flush at 75 chars — running low
-  - 50-200 fragments: flush at 150 chars — comfortable
-  - 200+ fragments: flush at 750 chars — deep buffer, accumulate
+  - <50 fragments: flush at 35 chars — running low
+  - 50-200 fragments: flush at 120 chars — comfortable
+  - 200+ fragments: flush at 500 chars — deep buffer, accumulate
   - Hard cap at 1000 chars always
 
-Tool use: loops until Claude produces a text-only response. Sends filler
-speech to Voice while tools execute.
+Tool use: loops until Claude produces a text-only response. Tools are defined
+as decorated Python methods with Google-style docstrings.
 
 On interrupt (StateChange("listening") or StateChange("interrupted")): stops streaming, saves partial response.
 """
 
 import logging
+import random
 import threading
 from queue import Empty
+from typing import Literal
 
 import anthropic
 
-from robot.core import Bus, Component, TextChunk, ToolEvent, BufferStatus, StateChange
-from memory import read_home_memory, read_memory, save_home_memory, save_memory
+from robot.core import (
+    BufferStatus,
+    Bus,
+    Component,
+    StateChange,
+    TextChunk,
+    ToolEvent,
+)
+import memory as memory_store
+from .agent_tools import agent_tool, collect_agent_tools
 
 logger = logging.getLogger(__name__)
 
@@ -37,83 +47,6 @@ INTERRUPT_ACKS = [
     "Sure, forget what I was saying.",
     "Okay, new direction.",
     "Alright, go ahead.",
-]
-
-# Tool definitions for Claude
-TOOLS = [
-    {
-        "name": "pause_to_think",
-        "description": (
-            "Use when the user asks a complex question that benefits from deeper "
-            "reasoning before answering, but does not need external information. "
-            "Before calling this tool, say one short, natural, context-specific "
-            "acknowledgement out loud that names what you are thinking through. "
-            "Spend as much time thinking here as necessary before continuing. "
-            "Use this sparingly. Do not use it for simple questions."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "thoughts": {
-                    "type": "string",
-                    "description": (
-                        "Private notes for the thinking step. Spend as much time "
-                        "thinking here as necessary."
-                    ),
-                },
-            },
-            "required": ["thoughts"],
-        },
-    },
-    {
-        "name": "save_memory",
-        "description": (
-            "Save a stable fact to long-term memory. Use this when the user shares "
-            "personal preferences, recurring habits, ongoing projects, important "
-            "relationships, or stable facts about the home/robot setup. Do not save "
-            "one-off requests, temporary moods, or facts that only matter right now."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "scope": {
-                    "type": "string",
-                    "enum": ["user", "home"],
-                    "description": (
-                        "Use 'user' for facts about the current person. Use 'home' "
-                        "for shared facts about the house, robot, devices, routines, "
-                        "or setup."
-                    ),
-                },
-                "fact": {
-                    "type": "string",
-                    "description": (
-                        "A short declarative memory. Good: 'Prefers concise answers "
-                        "in the morning.' Bad: 'The user told me something.'"
-                    ),
-                },
-            },
-            "required": ["scope", "fact"],
-        },
-    },
-    {
-        "name": "web_search",
-        "description": (
-            "Search the web for current information. Use this when the user asks about "
-            "recent events, facts you're unsure about, or anything that benefits from "
-            "up-to-date information."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query",
-                },
-            },
-            "required": ["query"],
-        },
-    },
 ]
 
 
@@ -140,6 +73,7 @@ class Brain(Component):
         self.system_prompt = system_prompt
         self.current_user = current_user
         self.client = anthropic.Anthropic()
+        self._tool_schemas, self._tool_handlers = collect_agent_tools(self)
         self.conversation_history: list[dict] = []
         self._buffer_depth = 0
         self._interrupted = threading.Event()
@@ -251,7 +185,7 @@ class Brain(Component):
             max_tokens=2000,
             system=self._build_system_prompt(),
             messages=self.conversation_history,
-            tools=TOOLS,
+            tools=self._tool_schemas,
         ) as stream:
             for token in stream.text_stream:
                 if self._interrupted.is_set():
@@ -293,18 +227,15 @@ class Brain(Component):
 
     def _execute_tool(self, name: str, input_data: dict) -> str:
         """Execute a tool and return the result as a string."""
-        if name == "pause_to_think":
-            return self._pause_to_think(input_data)
-        if name == "save_memory":
-            return self._save_memory(input_data)
-        if name == "web_search":
-            return self._web_search(input_data.get("query", ""))
+        handler = self._tool_handlers.get(name)
+        if handler:
+            return handler(**input_data)
         return f"Unknown tool: {name}"
 
     def _build_system_prompt(self) -> str:
         """Build the voice prompt with current long-term memory injected."""
-        user_memory = read_memory(self.current_user)
-        home_memory = read_home_memory()
+        user_memory = memory_store.read_memory(self.current_user)
+        home_memory = memory_store.read_home_memory()
         parts = [self.system_prompt.strip()]
         parts.append(
             "You have long-term memory. Relevant memory is loaded below. "
@@ -326,27 +257,61 @@ class Brain(Component):
             parts.append(f"## Home / Robot Memory\n{home_memory.strip()}")
         return "\n\n".join(part for part in parts if part)
 
-    def _save_memory(self, input_data: dict) -> str:
-        """Persist a memory selected by the model."""
-        scope = input_data.get("scope", "user")
-        fact = input_data.get("fact", "").strip()
+    @agent_tool
+    def save_memory(self, scope: Literal["user", "home"], fact: str) -> str:
+        """Save a stable fact to long-term memory.
+
+        Use when the user shares personal preferences, recurring habits,
+        ongoing projects, important relationships, or stable facts about the
+        home/robot setup. Do not save one-off requests, temporary moods, or
+        facts that only matter right now.
+
+        Args:
+            scope: Use 'user' for facts about the current person. Use 'home'
+                for shared facts about the house, robot, devices, routines, or
+                setup.
+            fact: A short declarative memory. Good: 'Prefers concise answers
+                in the morning.' Bad: 'The user told me something.'
+        """
+        fact = fact.strip()
         if not fact:
             return "Memory not saved: fact was empty."
         if scope == "home":
-            return save_home_memory(fact)
+            return memory_store.save_home_memory(fact)
         if scope == "user":
-            return save_memory(self.current_user, fact)
+            return memory_store.save_memory(self.current_user, fact)
         return f"Memory not saved: unknown scope '{scope}'."
 
-    def _pause_to_think(self, input_data: dict) -> str:
-        """No-op tool that gives complex voice turns an intentional silent beat."""
-        thoughts = input_data.get("thoughts", "").strip()
+    @agent_tool
+    def pause_to_think(self, thoughts: str) -> str:
+        """Pause for complex reasoning before answering.
+
+        Use when the user asks a complex question that benefits from deeper
+        reasoning before answering, but does not need external information.
+        Before calling this tool, say one short, natural, context-specific
+        acknowledgement out loud that names what you are thinking through.
+        Spend as much time thinking here as necessary before continuing. Use
+        this sparingly. Do not use it for simple questions.
+
+        Args:
+            thoughts: Private notes for the thinking step. Spend as much time
+                thinking here as necessary.
+        """
+        thoughts = thoughts.strip()
         if thoughts:
             logger.info("[brain] pause_to_think: %s", thoughts[:120])
         return "Done thinking. Continue with the answer."
 
-    def _web_search(self, query: str) -> str:
-        """Search the web via Tavily API."""
+    @agent_tool
+    def web_search(self, query: str) -> str:
+        """Search the web for current information.
+
+        Use when the user asks about recent events, facts you're unsure about,
+        or anything that benefits from up-to-date information.
+
+        Args:
+            query: The search query.
+        """
         import os
         from tavily import TavilyClient
 
