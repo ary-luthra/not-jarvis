@@ -31,39 +31,12 @@ CHUNK_MAX_CHARS = 1000
 BUF_LOW = 50
 BUF_COMFORTABLE = 200
 
-# Fillers sent to Voice while waiting
-THINKING_FILLERS = [
-    "Hmm, let me think about that.",
-    "Good question. Give me a sec.",
-    "Oh, interesting.",
-    "Let me think...",
-    "Hmm.",
-    "Sure, one moment.",
-    "Ooh, that's a good one.",
-]
-
-TOOL_FILLERS = {
-    "web_search": [
-        "Let me look that up.",
-        "Searching for that now.",
-        "One sec, let me check.",
-        "Let me find that for you.",
-    ],
-}
-
 INTERRUPT_ACKS = [
     "Oh, that changes things.",
     "Got it, switching gears.",
     "Sure, forget what I was saying.",
     "Okay, new direction.",
     "Alright, go ahead.",
-]
-
-# Default filler for unknown tools
-DEFAULT_TOOL_FILLERS = [
-    "Hold on, let me check on that.",
-    "One moment.",
-    "Working on that.",
 ]
 
 # Tool definitions for Claude
@@ -207,8 +180,6 @@ class Brain(Component):
         if was_interrupted:
             self.text_bus.put(TextChunk(text=random.choice(INTERRUPT_ACKS)))
 
-        filler = self._pick_filler(user_text)
-        self.text_bus.put(TextChunk(text=filler))
         logger.info(f"[brain] processing: {user_text[:80]}")
 
         # Stream Claude, handle tool calls in a loop
