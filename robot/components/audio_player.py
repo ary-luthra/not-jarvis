@@ -110,7 +110,7 @@ class AudioPlayer(Component):
                 event = self._state_q.get(timeout=0.1)
             except Empty:
                 continue
-            if isinstance(event, StateChange) and event.state == "listening":
+            if isinstance(event, StateChange) and event.state in ("listening", "interrupted"):
                 self._interrupted.set()
                 logger.debug("[audio] interrupt signal received")
 
