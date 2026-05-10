@@ -9,7 +9,7 @@ Chunking strategy based on audio buffer depth (PCM fragment count):
 Tool use: loops until Claude produces a text-only response. Sends filler
 speech to Voice while tools execute.
 
-On interrupt (StateChange("listening")): stops streaming, saves partial response.
+On interrupt (StateChange("listening") or StateChange("interrupted")): stops streaming, saves partial response.
 """
 
 import logging
@@ -51,6 +51,14 @@ TOOL_FILLERS = {
         "Let me find that for you.",
     ],
 }
+
+INTERRUPT_ACKS = [
+    "Oh, that changes things.",
+    "Got it, switching gears.",
+    "Sure, forget what I was saying.",
+    "Okay, new direction.",
+    "Alright, go ahead.",
+]
 
 # Default filler for unknown tools
 DEFAULT_TOOL_FILLERS = [
@@ -158,15 +166,24 @@ class Brain(Component):
                 event = self._state_q.get(timeout=0.1)
             except Empty:
                 continue
-            if isinstance(event, StateChange) and event.state == "listening":
+            if isinstance(event, StateChange) and event.state in ("listening", "interrupted"):
                 self._interrupted.set()
                 logger.debug("[brain] interrupted")
 
-    def _process(self, user_text: str):
+    def _process(self, payload):
+        if isinstance(payload, dict):
+            user_text = payload["text"]
+            was_interrupted = payload.get("interrupted", False)
+        else:
+            user_text = payload
+            was_interrupted = False
+
         self.conversation_history.append({"role": "user", "content": user_text})
         self.state_bus.put(StateChange(state="thinking"))
 
-        # Send thinking filler
+        if was_interrupted:
+            self.text_bus.put(TextChunk(text=random.choice(INTERRUPT_ACKS)))
+
         filler = self._pick_filler(user_text)
         self.text_bus.put(TextChunk(text=filler))
         logger.info(f"[brain] processing: {user_text[:80]}")
