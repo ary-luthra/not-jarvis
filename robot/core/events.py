@@ -28,6 +28,7 @@ class TimedAudio:
     sample_rate: int
     chunk_id: str = ""
     alignment: dict | None = None
+    is_final: bool = False
 
 
 @dataclass
