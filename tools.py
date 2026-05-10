@@ -50,6 +50,8 @@ def dispatch_function_call(name: str, arguments: str, username: str) -> str:
             return session_manager.read_output(args["session_id"])
         if name == "send_followup_to_task":
             return session_manager.send_followup(args["session_id"], args["message"])
+        if name == "terminate_computer_task":
+            return session_manager.cleanup(args["session_id"])
     except KeyError as e:
         logger.error("Missing required argument for %s: %s", name, e)
         return f"Error: missing required argument {e}"

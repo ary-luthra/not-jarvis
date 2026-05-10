@@ -3,7 +3,7 @@
 import logging
 
 from robot.core import Bus
-from robot.components import Brain, Voice, AudioPlayer, Listener
+from robot.components import Brain, Voice, AudioPlayer, Listener, BodyController
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,13 @@ VOICE_SYSTEM_PROMPT = (
 
 
 class Orchestrator:
-    def __init__(self, system_prompt: str = VOICE_SYSTEM_PROMPT, text_mode: bool = False, mini=None):
+    def __init__(
+        self,
+        system_prompt: str = VOICE_SYSTEM_PROMPT,
+        text_mode: bool = False,
+        mini=None,
+        current_user: str = "aryan",
+    ):
         # Buses
         self.input_bus = Bus()
         self.text_bus = Bus()
@@ -29,27 +35,26 @@ class Orchestrator:
         self.tool_bus = Bus()
         self.cue_bus = Bus()
 
-        # Components — all subscribe to state_bus for interrupt handling
+        # Components — each takes the buses it cares about
         self.brain = Brain(
-            input_in=self.input_bus,
-            text_out=self.text_bus,
-            tool_out=self.tool_bus,
-            state_out=self.state_bus,
-            buffer_in=self.buffer_bus,
-            state_in=self.state_bus,
+            input_bus=self.input_bus,
+            text_bus=self.text_bus,
+            tool_bus=self.tool_bus,
+            state_bus=self.state_bus,
+            buffer_bus=self.buffer_bus,
             system_prompt=system_prompt,
+            current_user=current_user,
         )
         self.voice = Voice(
-            text_in=self.text_bus,
-            audio_out=self.audio_bus,
-            state_in=self.state_bus,
+            text_bus=self.text_bus,
+            audio_bus=self.audio_bus,
+            state_bus=self.state_bus,
         )
         self.audio_player = AudioPlayer(
-            audio_in=self.audio_bus,
-            state_out=self.state_bus,
-            buffer_out=self.buffer_bus,
-            marker_out=self.marker_bus,
-            state_in=self.state_bus,
+            audio_bus=self.audio_bus,
+            state_bus=self.state_bus,
+            buffer_bus=self.buffer_bus,
+            marker_bus=self.marker_bus,
         )
 
         self._components = [self.brain, self.voice, self.audio_player]
@@ -60,6 +65,15 @@ class Orchestrator:
                 input_bus=self.input_bus,
             )
             self._components.append(self.listener)
+
+        if mini:
+            self.body = BodyController(
+                mini=mini,
+                state_bus=self.state_bus,
+            )
+            self._components.append(self.body)
+
+        # Phase 4: Director(text_bus, state_bus, tool_bus, cue_bus)
 
     def start(self):
         for c in self._components:

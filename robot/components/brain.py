@@ -1,22 +1,26 @@
-"""Brain component: streams Claude responses, chunks text, emits TextChunks.
+"""Brain component: streams Claude responses, chunks text, handles tool calls.
 
 Chunking strategy based on audio buffer depth (PCM fragment count):
-  - <50 fragments (~few seconds): flush at 75 chars — running low
+  - <50 fragments: flush at 75 chars — running low
   - 50-200 fragments: flush at 150 chars — comfortable
   - 200+ fragments: flush at 750 chars — deep buffer, accumulate
   - Hard cap at 1000 chars always
 
-Interruption: subscribes to state_bus. On StateChange("listening"),
-stops streaming and saves partial response to conversation history.
+Tool use: loops until Claude produces a text-only response. Sends filler
+speech to Voice while tools execute.
+
+On interrupt (StateChange("listening")): stops streaming, saves partial response.
 """
 
 import logging
+import random
 import threading
 from queue import Empty
 
 import anthropic
 
-from robot.core import Bus, Component, TextChunk, BufferStatus, StateChange
+from robot.core import Bus, Component, TextChunk, ToolEvent, BufferStatus, StateChange
+from memory import read_home_memory, read_memory, save_home_memory, save_memory
 
 logger = logging.getLogger(__name__)
 
@@ -28,35 +32,115 @@ CHUNK_MAX_CHARS = 1000
 BUF_LOW = 50
 BUF_COMFORTABLE = 200
 
+# Fillers sent to Voice while waiting
+THINKING_FILLERS = [
+    "Hmm, let me think about that.",
+    "Good question. Give me a sec.",
+    "Oh, interesting.",
+    "Let me think...",
+    "Hmm.",
+    "Sure, one moment.",
+    "Ooh, that's a good one.",
+]
+
+TOOL_FILLERS = {
+    "web_search": [
+        "Let me look that up.",
+        "Searching for that now.",
+        "One sec, let me check.",
+        "Let me find that for you.",
+    ],
+}
+
+# Default filler for unknown tools
+DEFAULT_TOOL_FILLERS = [
+    "Hold on, let me check on that.",
+    "One moment.",
+    "Working on that.",
+]
+
+# Tool definitions for Claude
+TOOLS = [
+    {
+        "name": "save_memory",
+        "description": (
+            "Save a stable fact to long-term memory. Use this when the user shares "
+            "personal preferences, recurring habits, ongoing projects, important "
+            "relationships, or stable facts about the home/robot setup. Do not save "
+            "one-off requests, temporary moods, or facts that only matter right now."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["user", "home"],
+                    "description": (
+                        "Use 'user' for facts about the current person. Use 'home' "
+                        "for shared facts about the house, robot, devices, routines, "
+                        "or setup."
+                    ),
+                },
+                "fact": {
+                    "type": "string",
+                    "description": (
+                        "A short declarative memory. Good: 'Prefers concise answers "
+                        "in the morning.' Bad: 'The user told me something.'"
+                    ),
+                },
+            },
+            "required": ["scope", "fact"],
+        },
+    },
+    {
+        "name": "web_search",
+        "description": (
+            "Search the web for current information. Use this when the user asks about "
+            "recent events, facts you're unsure about, or anything that benefits from "
+            "up-to-date information."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+]
+
 
 class Brain(Component):
     def __init__(
         self,
-        input_in: Bus,
-        text_out: Bus,
-        tool_out: Bus,
-        state_out: Bus,
-        buffer_in: Bus,
-        state_in: Bus,
+        input_bus: Bus,
+        text_bus: Bus,
+        tool_bus: Bus,
+        state_bus: Bus,
+        buffer_bus: Bus,
         model: str = "claude-sonnet-4-20250514",
         system_prompt: str = "",
+        current_user: str = "aryan",
     ):
         super().__init__("brain")
-        self._input_q = input_in.subscribe()
-        self.text_out = text_out
-        self.tool_out = tool_out
-        self.state_out = state_out
-        self._buffer_q = buffer_in.subscribe()
-        self._state_q = state_in.subscribe()
+        self._input_q = input_bus.subscribe()
+        self.text_bus = text_bus
+        self.tool_bus = tool_bus
+        self.state_bus = state_bus
+        self._state_q = state_bus.subscribe()
+        self._buffer_q = buffer_bus.subscribe()
         self.model = model
         self.system_prompt = system_prompt
+        self.current_user = current_user
         self.client = anthropic.Anthropic()
         self.conversation_history: list[dict] = []
         self._buffer_depth = 0
         self._interrupted = threading.Event()
 
     def run(self):
-        # Background thread to watch for interrupts
         interrupt_thread = threading.Thread(target=self._watch_state, daemon=True)
         interrupt_thread.start()
 
@@ -69,7 +153,6 @@ class Brain(Component):
             self._process(user_text)
 
     def _watch_state(self):
-        """Watch state bus for interruption signals."""
         while self.running:
             try:
                 event = self._state_q.get(timeout=0.1)
@@ -81,30 +164,95 @@ class Brain(Component):
 
     def _process(self, user_text: str):
         self.conversation_history.append({"role": "user", "content": user_text})
-        self.state_out.put(StateChange(state="thinking"))
+        self.state_bus.put(StateChange(state="thinking"))
+
+        # Send thinking filler
+        filler = self._pick_filler(user_text)
+        self.text_bus.put(TextChunk(text=filler))
         logger.info(f"[brain] processing: {user_text[:80]}")
 
+        # Stream Claude, handle tool calls in a loop
+        while not self._interrupted.is_set():
+            response, text, was_interrupted = self._stream_response()
+
+            if was_interrupted:
+                if text:
+                    self.conversation_history.append(
+                        {"role": "assistant", "content": text}
+                    )
+                logger.info(f"[brain] interrupted ({len(text)} chars)")
+                return
+
+            # Check for tool calls
+            tool_use_blocks = [
+                block for block in response.content if block.type == "tool_use"
+            ]
+
+            if not tool_use_blocks:
+                # No tool call — we're done
+                if text:
+                    self.conversation_history.append(
+                        {"role": "assistant", "content": text}
+                    )
+                logger.info(f"[brain] done ({len(text)} chars)")
+                return
+
+            # Save assistant response with tool use to history
+            self.conversation_history.append(
+                {"role": "assistant", "content": response.content}
+            )
+
+            tool_results = []
+            for tool_use_block in tool_use_blocks:
+                # Handle tool call
+                logger.info(f"[brain] tool call: {tool_use_block.name}({tool_use_block.input})")
+
+                # Publish tool event and send filler
+                self.tool_bus.put(ToolEvent(name=tool_use_block.name, status="started"))
+                if tool_use_block.name != "save_memory":
+                    tool_filler = random.choice(
+                        TOOL_FILLERS.get(tool_use_block.name, DEFAULT_TOOL_FILLERS)
+                    )
+                    self.text_bus.put(TextChunk(text=tool_filler))
+
+                # Execute tool
+                result = self._execute_tool(tool_use_block.name, tool_use_block.input)
+
+                self.tool_bus.put(ToolEvent(
+                    name=tool_use_block.name, status="done", result=result
+                ))
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_block.id,
+                    "content": result,
+                })
+
+            # Add tool results to history and loop for Claude's follow-up
+            self.conversation_history.append({
+                "role": "user",
+                "content": tool_results,
+            })
+
+    def _stream_response(self) -> tuple:
+        """Stream one Claude response. Returns (response, full_text, was_interrupted)."""
         buffer = ""
         full_response = ""
         chunks_sent = 0
-        was_interrupted = False
 
         with self.client.messages.stream(
             model=self.model,
             max_tokens=2000,
-            system=self.system_prompt,
+            system=self._build_system_prompt(),
             messages=self.conversation_history,
+            tools=TOOLS,
         ) as stream:
             for token in stream.text_stream:
                 if self._interrupted.is_set():
-                    was_interrupted = True
-                    logger.info("[brain] stopping stream (interrupted)")
-                    break
+                    return None, full_response, True
 
                 buffer += token
                 full_response += token
 
-                # Drain buffer status updates (non-blocking)
                 while not self._buffer_q.empty():
                     status = self._buffer_q.get()
                     if isinstance(status, BufferStatus):
@@ -121,25 +269,95 @@ class Brain(Component):
                 if result:
                     chunk_text, buffer = result
                     chunks_sent += 1
-                    self.text_out.put(TextChunk(text=chunk_text))
+                    self.text_bus.put(TextChunk(text=chunk_text))
                     logger.debug(f"[brain] chunk #{chunks_sent} ({len(chunk_text)} chars, buf={self._buffer_depth}): {chunk_text[:60]}...")
 
-        if not was_interrupted:
-            # Normal finish — flush remaining and signal end
-            remaining = buffer.strip()
-            if remaining:
-                self.text_out.put(TextChunk(text=remaining, is_final=True))
-            else:
-                self.text_out.put(TextChunk(text="", is_final=True))
+            response = stream.get_final_message()
 
-        # Save whatever we generated (partial or full) to history
-        if full_response:
-            self.conversation_history.append(
-                {"role": "assistant", "content": full_response}
+        # Flush remaining text
+        remaining = buffer.strip()
+        if remaining:
+            self.text_bus.put(TextChunk(text=remaining, is_final=True))
+        else:
+            self.text_bus.put(TextChunk(text="", is_final=True))
+
+        return response, full_response, False
+
+    def _execute_tool(self, name: str, input_data: dict) -> str:
+        """Execute a tool and return the result as a string."""
+        if name == "save_memory":
+            return self._save_memory(input_data)
+        if name == "web_search":
+            return self._web_search(input_data.get("query", ""))
+        return f"Unknown tool: {name}"
+
+    def _build_system_prompt(self) -> str:
+        """Build the voice prompt with current long-term memory injected."""
+        user_memory = read_memory(self.current_user)
+        home_memory = read_home_memory()
+        parts = [self.system_prompt.strip()]
+        parts.append(
+            "You have long-term memory. Relevant memory is loaded below. "
+            "Use it naturally, but do not mention that you are reading memory unless asked.\n\n"
+            "When the user shares stable personal preferences, recurring habits, ongoing "
+            "projects, or important facts, call save_memory with scope='user'. "
+            "When they share stable facts about the home, robot, devices, routines, or "
+            "setup, call save_memory with scope='home'. If they ask a question while "
+            "sharing a memory-worthy fact, save the memory and then still answer the question."
+        )
+        if user_memory:
+            parts.append(f"## User Memory ({self.current_user})\n{user_memory.strip()}")
+        if home_memory:
+            parts.append(f"## Home / Robot Memory\n{home_memory.strip()}")
+        return "\n\n".join(part for part in parts if part)
+
+    def _save_memory(self, input_data: dict) -> str:
+        """Persist a memory selected by the model."""
+        scope = input_data.get("scope", "user")
+        fact = input_data.get("fact", "").strip()
+        if not fact:
+            return "Memory not saved: fact was empty."
+        if scope == "home":
+            return save_home_memory(fact)
+        if scope == "user":
+            return save_memory(self.current_user, fact)
+        return f"Memory not saved: unknown scope '{scope}'."
+
+    def _web_search(self, query: str) -> str:
+        """Search the web via Tavily API."""
+        import os
+        from tavily import TavilyClient
+
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
+            return "Web search unavailable — TAVILY_API_KEY not set."
+
+        try:
+            client = TavilyClient(api_key=api_key)
+            response = client.search(query, max_results=5)
+            return response.get("answer", "") or "\n".join(
+                r.get("content", "") for r in response.get("results", [])
             )
+        except Exception as e:
+            logger.exception("[brain] web search failed")
+            return f"Search failed: {e}"
 
-        status = "interrupted" if was_interrupted else "done"
-        logger.info(f"[brain] {status} ({len(full_response)} chars, {chunks_sent} chunks)")
+    def _pick_filler(self, user_text: str) -> str:
+        """Pick a thinking filler based on input length."""
+        length = len(user_text)
+        if length < 20:
+            # Short question — minimal filler
+            return random.choice(["Sure!", "Yep!", "Mm-hmm.", "Oh yeah."])
+        elif length < 80:
+            return random.choice(THINKING_FILLERS)
+        else:
+            # Long/complex question
+            return random.choice([
+                "Ooh, that's a good one. Let me think about that.",
+                "Okay, let me put something together for you.",
+                "That's a great question. Give me a moment.",
+                "Hmm, let me think through this one.",
+            ])
 
     def _try_flush(self, buffer: str, min_chars: int) -> tuple[str, str] | None:
         search_region = buffer[:CHUNK_MAX_CHARS]

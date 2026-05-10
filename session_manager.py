@@ -123,6 +123,12 @@ class Session:
                     self.result = data.get("result")
                     self.cost = data.get("total_cost_usd", 0.0)
                     self.status = "done" if not data.get("is_error") else "failed"
+                    # Log permission denials from the result summary
+                    for denial in data.get("permission_denials", []):
+                        event_log.emit("session", "permission_denied",
+                                       session_id=self.internal_id,
+                                       tool=denial.get("tool", "?"),
+                                       reason=denial.get("reason", "")[:200])
                     event_log.emit("session", "session_end",
                                    session_id=self.internal_id,
                                    status=self.status,
@@ -176,24 +182,39 @@ class SessionManager:
 
         _ensure_sandbox_dir()
 
-        sandboxed_task = (
-            f"You are in a sandboxed workspace at {SANDBOX_DIR}. "
-            f"All file operations must stay in this directory. "
-            f"Use relative paths.\n\n"
-            f"Task: {task}"
-        )
+        if use_browser:
+            prompt = task
+            browser_system_prompt = (
+                "You are a browser automation agent. You MUST use the mcp__claude-in-chrome__ MCP tools to interact with Chrome.\n\n"
+                "STEP 1: Call ToolSearch with query \"select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__get_page_text,mcp__claude-in-chrome__form_input,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__find\"\n"
+                "STEP 2: Call mcp__claude-in-chrome__tabs_context_mcp with createIfEmpty=true\n"
+                "STEP 3: Navigate and interact using the loaded tools.\n\n"
+                "RULES:\n"
+                "- ONLY use mcp__claude-in-chrome__* tools and ToolSearch. Do NOT use Bash, Gmail, Notion, Todoist, or any other tools.\n"
+                "- When read_page output is too large, reduce the depth parameter or use ref_id to focus on specific elements.\n"
+                "- Always create a new tab rather than reusing existing ones."
+            )
+        else:
+            prompt = (
+                f"You are in a sandboxed workspace at {SANDBOX_DIR}. "
+                f"All file operations must stay in this directory. "
+                f"Use relative paths.\n\n"
+                f"Task: {task}"
+            )
+            browser_system_prompt = None
 
         cmd = [
             CLAUDE_CODE_PATH,
-            "-p", sandboxed_task,
+            "-p", prompt,
             "--output-format", "stream-json",
             "--verbose",
             "--max-turns", str(DEFAULT_MAX_TURNS),
-            "--allowedTools", DEFAULT_ALLOWED_TOOLS,
-            "--settings", _SANDBOX_SETTINGS,
         ]
         if use_browser:
-            cmd.append("--chrome")
+            cmd.extend(["--system-prompt", browser_system_prompt, "--chrome"])
+        else:
+            cmd.extend(["--allowedTools", DEFAULT_ALLOWED_TOOLS,
+                         "--settings", _SANDBOX_SETTINGS])
         if isolate:
             cmd.extend(["--worktree", f"task-{self._counter + 1}"])
 

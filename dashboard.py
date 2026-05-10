@@ -101,6 +101,7 @@ class SessionPanel(Static):
         self.cost = 0.0
         self.duration = 0
         self.lines: list[str] = []
+        self.expanded = True
 
     def update_display(self):
         status_colors = {"running": "yellow", "done": "green", "failed": "red"}
@@ -117,13 +118,14 @@ class SessionPanel(Static):
 
         # Task description on its own line, truncated sensibly
         if self.task_desc:
-            desc = self.task_desc[:120]
+            desc = self.task_desc[:200]
             parts.append(f"[dim italic]{desc}[/]")
 
-        # Activity log — show last 5 lines
+        # Activity log — show all lines when expanded, last 3 when collapsed
         if self.lines:
             parts.append("")  # spacer
-            for line in self.lines[-5:]:
+            visible = self.lines if self.expanded else self.lines[-3:]
+            for line in visible:
                 parts.append(f"  {line}")
 
         self.update("\n".join(parts))
@@ -161,13 +163,15 @@ class Dashboard(App):
     }
     #sessions-container {
         height: 1fr;
-        overflow-y: auto;
+        overflow-y: scroll;
     }
     SessionPanel {
         height: auto;
         margin: 0 0 1 0;
         padding: 1 1;
         border: round $surface-lighten-2;
+        max-height: 50%;
+        overflow-y: scroll;
     }
     """
 
@@ -200,13 +204,15 @@ class Dashboard(App):
         self.set_interval(0.5, self._poll_events)
 
     def _open_log(self):
-        """Open the latest log file for tailing."""
+        """Open the latest log file for tailing, starting from the end."""
         log_file = find_latest_log(self.log_dir)
         if log_file and log_file != self.log_file:
             if self.log_handle:
                 self.log_handle.close()
             self.log_file = log_file
             self.log_handle = open(log_file, "r")
+            # Skip to end — only show new events
+            self.log_handle.seek(0, 2)
             orch_log = self.query_one("#orchestrator-log", RichLog)
             orch_log.write(f"[dim]Tailing {log_file.name}[/]")
 
@@ -338,6 +344,11 @@ class Dashboard(App):
                 panel.status = "running"
                 msg = data.get("message", "")[:60]
                 panel.lines.append(f"[dim]{ts}[/] [cyan]Follow-up:[/] {msg}")
+
+            elif event_type == "permission_denied":
+                tool = data.get("tool", "?")
+                reason = data.get("reason", "")[:80]
+                panel.lines.append(f"[dim]{ts}[/] [bold red]⛔ DENIED:[/] [red]{tool}[/] {reason}")
 
             panel.update_display()
 

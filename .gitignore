@@ -8,3 +8,5 @@ memory/
 sandbox/
 notes/
 logs/
+.vscode/
+test_env

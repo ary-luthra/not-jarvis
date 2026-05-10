@@ -1,6 +1,7 @@
 """AudioPlayer component: plays TimedAudio, emits sync markers and buffer status.
 
-On interruption (StateChange("listening")), stops playback and clears queue.
+Owns the speaking → idle transition. When audio queue goes dry for 0.5s
+after playing, transitions to idle. On interrupt: stops immediately.
 """
 
 import logging
@@ -12,43 +13,43 @@ import numpy as np
 import sounddevice as sd
 
 from robot.core import (
-    Bus, Component, TimedAudio, EndOfResponse,
+    Bus, Component, TimedAudio,
     PlaybackMarker, StateChange, BufferStatus,
 )
 
 logger = logging.getLogger(__name__)
 
+IDLE_TIMEOUT = 0.5  # seconds of empty queue before transitioning to idle
+
 
 class AudioPlayer(Component):
     def __init__(
         self,
-        audio_in: Bus,
-        state_out: Bus,
-        buffer_out: Bus,
-        marker_out: Bus,
-        state_in: Bus,
+        audio_bus: Bus,
+        state_bus: Bus,
+        buffer_bus: Bus,
+        marker_bus: Bus,
     ):
         super().__init__("audio_player")
-        self._audio_q = audio_in.subscribe()
-        self._state_q = state_in.subscribe()
-        self.state_out = state_out
-        self.buffer_out = buffer_out
-        self.marker_out = marker_out
+        self._audio_q = audio_bus.subscribe()
+        self._state_q = state_bus.subscribe()
+        self.state_bus = state_bus
+        self.buffer_bus = buffer_bus
+        self.marker_bus = marker_bus
         self._stream = None
         self._current_rate = None
         self._total_samples = 0
         self._playback_start = None
         self._interrupted = threading.Event()
+        self._is_speaking = False
 
     def run(self):
-        # Watch for interrupts in background
         interrupt_thread = threading.Thread(target=self._watch_state, daemon=True)
         interrupt_thread.start()
 
         current_chunk_id = None
 
         while self.running:
-            # Check for interrupt
             if self._interrupted.is_set():
                 self._handle_interrupt()
                 current_chunk_id = None
@@ -56,35 +57,38 @@ class AudioPlayer(Component):
                 continue
 
             try:
-                item = self._audio_q.get(timeout=0.1)
+                item = self._audio_q.get(timeout=IDLE_TIMEOUT)
             except Empty:
+                # Queue has been dry — if we were speaking, we're done
+                if self._is_speaking:
+                    self._drain()
+                    self._is_speaking = False
+                    self.state_bus.put(StateChange(state="idle"))
+                    self.buffer_bus.put(BufferStatus(depth=0, seconds_remaining=0))
+                    current_chunk_id = None
+                    logger.debug("[audio] idle")
                 continue
 
             if self._interrupted.is_set():
                 continue
 
-            if isinstance(item, EndOfResponse):
-                self._drain()
-                self.state_out.put(StateChange(state="idle"))
-                self.buffer_out.put(BufferStatus(depth=0, seconds_remaining=0))
-                current_chunk_id = None
-                logger.debug("[audio] idle")
-                continue
-
             if not isinstance(item, TimedAudio):
                 continue
 
+            # First audio or new chunk — emit markers
             if item.chunk_id != current_chunk_id:
                 current_chunk_id = item.chunk_id
-                self.state_out.put(StateChange(state="speaking"))
-                self.marker_out.put(
+                if not self._is_speaking:
+                    self._is_speaking = True
+                    self.state_bus.put(StateChange(state="speaking"))
+                self.marker_bus.put(
                     PlaybackMarker(
                         chunk_id=item.chunk_id,
                         wall_time_started=time.time(),
                     )
                 )
                 depth = self._audio_q.qsize()
-                self.buffer_out.put(BufferStatus(depth=depth, seconds_remaining=0))
+                self.buffer_bus.put(BufferStatus(depth=depth, seconds_remaining=0))
                 logger.debug(f"[audio] playing chunk {item.chunk_id} (buf={depth})")
 
             self._play(item)
@@ -100,10 +104,9 @@ class AudioPlayer(Component):
                 logger.debug("[audio] interrupt signal received")
 
     def _handle_interrupt(self):
-        """Stop playback and clear queued audio."""
         logger.info("[audio] interrupted — stopping playback")
         self._close_stream()
-        # Drain the audio queue
+        self._is_speaking = False
         while not self._audio_q.empty():
             try:
                 self._audio_q.get_nowait()

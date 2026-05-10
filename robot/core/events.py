@@ -31,12 +31,6 @@ class TimedAudio:
 
 
 @dataclass
-class EndOfResponse:
-    """Marker: all audio for this response has been queued."""
-    pass
-
-
-@dataclass
 class PlaybackMarker:
     """AudioPlayer signals when a chunk actually starts playing."""
     chunk_id: str

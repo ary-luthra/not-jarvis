@@ -4,7 +4,6 @@ from .events import (
     TextChunk,
     ToolEvent,
     TimedAudio,
-    EndOfResponse,
     PlaybackMarker,
     StateChange,
     BufferStatus,

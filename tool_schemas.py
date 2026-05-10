@@ -150,6 +150,29 @@ SEND_FOLLOWUP_TO_TASK_TOOL = {
     },
 }
 
+TERMINATE_COMPUTER_TASK_TOOL = {
+    "type": "function",
+    "name": "terminate_computer_task",
+    "description": (
+        "Terminate a running Claude Code session immediately. "
+        "Use this when a task is stuck, taking too long, doing something wrong, "
+        "or the user asks you to stop/kill/cancel it.\n\n"
+        "This kills the subprocess and removes the session from tracking. "
+        "Cannot be undone — the session's work-in-progress is lost."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "The session ID to terminate (e.g. 'task-1').",
+            },
+        },
+        "required": ["session_id"],
+        "additionalProperties": False,
+    },
+}
+
 # Master list passed to the OpenAI Responses API.
 # Hosted tools (like web_search_preview) go here alongside function tools.
 TOOLS = [
@@ -159,4 +182,5 @@ TOOLS = [
     LIST_COMPUTER_TASKS_TOOL,
     READ_TASK_OUTPUT_TOOL,
     SEND_FOLLOWUP_TO_TASK_TOOL,
+    TERMINATE_COMPUTER_TASK_TOOL,
 ]
