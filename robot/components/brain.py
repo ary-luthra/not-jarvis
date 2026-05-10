@@ -13,7 +13,6 @@ On interrupt (StateChange("listening") or StateChange("interrupted")): stops str
 """
 
 import logging
-import random
 import threading
 from queue import Empty
 
@@ -24,9 +23,9 @@ from memory import read_home_memory, read_memory, save_home_memory, save_memory
 
 logger = logging.getLogger(__name__)
 
-URGENT_MIN = 75
-LOW_MIN = 150
-COMFORTABLE_MIN = 750
+URGENT_MIN = 35
+LOW_MIN = 120
+COMFORTABLE_MIN = 500
 CHUNK_MAX_CHARS = 1000
 
 BUF_LOW = 50
@@ -69,6 +68,30 @@ DEFAULT_TOOL_FILLERS = [
 
 # Tool definitions for Claude
 TOOLS = [
+    {
+        "name": "pause_to_think",
+        "description": (
+            "Use when the user asks a complex question that benefits from deeper "
+            "reasoning before answering, but does not need external information. "
+            "Before calling this tool, say one short, natural, context-specific "
+            "acknowledgement out loud that names what you are thinking through. "
+            "Spend as much time thinking here as necessary before continuing. "
+            "Use this sparingly. Do not use it for simple questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "thoughts": {
+                    "type": "string",
+                    "description": (
+                        "Private notes for the thinking step. Spend as much time "
+                        "thinking here as necessary."
+                    ),
+                },
+            },
+            "required": ["thoughts"],
+        },
+    },
     {
         "name": "save_memory",
         "description": (
@@ -129,7 +152,7 @@ class Brain(Component):
         tool_bus: Bus,
         state_bus: Bus,
         buffer_bus: Bus,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         system_prompt: str = "",
         current_user: str = "aryan",
     ):
@@ -224,13 +247,9 @@ class Brain(Component):
                 # Handle tool call
                 logger.info(f"[brain] tool call: {tool_use_block.name}({tool_use_block.input})")
 
-                # Publish tool event and send filler
+                # Publish tool event. The model should provide any spoken lead-in
+                # itself before using a tool, so we don't inject generic filler here.
                 self.tool_bus.put(ToolEvent(name=tool_use_block.name, status="started"))
-                if tool_use_block.name != "save_memory":
-                    tool_filler = random.choice(
-                        TOOL_FILLERS.get(tool_use_block.name, DEFAULT_TOOL_FILLERS)
-                    )
-                    self.text_bus.put(TextChunk(text=tool_filler))
 
                 # Execute tool
                 result = self._execute_tool(tool_use_block.name, tool_use_block.input)
@@ -292,16 +311,19 @@ class Brain(Component):
             response = stream.get_final_message()
 
         # Flush remaining text
+        has_tool_call = any(block.type == "tool_use" for block in response.content)
         remaining = buffer.strip()
         if remaining:
-            self.text_bus.put(TextChunk(text=remaining, is_final=True))
+            self.text_bus.put(TextChunk(text=remaining, is_final=not has_tool_call))
         else:
-            self.text_bus.put(TextChunk(text="", is_final=True))
+            self.text_bus.put(TextChunk(text="", is_final=not has_tool_call))
 
         return response, full_response, False
 
     def _execute_tool(self, name: str, input_data: dict) -> str:
         """Execute a tool and return the result as a string."""
+        if name == "pause_to_think":
+            return self._pause_to_think(input_data)
         if name == "save_memory":
             return self._save_memory(input_data)
         if name == "web_search":
@@ -316,6 +338,11 @@ class Brain(Component):
         parts.append(
             "You have long-term memory. Relevant memory is loaded below. "
             "Use it naturally, but do not mention that you are reading memory unless asked.\n\n"
+            "For complex questions that need deeper reasoning but no external information, "
+            "you may use pause_to_think. Before using it, say one brief, natural, "
+            "context-specific acknowledgement that names the thing you are thinking through. "
+            "After it returns, answer directly. Use it sparingly; do not use it for simple "
+            "questions.\n\n"
             "When the user shares stable personal preferences, recurring habits, ongoing "
             "projects, or important facts, call save_memory with scope='user'. "
             "When they share stable facts about the home, robot, devices, routines, or "
@@ -340,6 +367,13 @@ class Brain(Component):
             return save_memory(self.current_user, fact)
         return f"Memory not saved: unknown scope '{scope}'."
 
+    def _pause_to_think(self, input_data: dict) -> str:
+        """No-op tool that gives complex voice turns an intentional silent beat."""
+        thoughts = input_data.get("thoughts", "").strip()
+        if thoughts:
+            logger.info("[brain] pause_to_think: %s", thoughts[:120])
+        return "Done thinking. Continue with the answer."
+
     def _web_search(self, query: str) -> str:
         """Search the web via Tavily API."""
         import os
@@ -358,23 +392,6 @@ class Brain(Component):
         except Exception as e:
             logger.exception("[brain] web search failed")
             return f"Search failed: {e}"
-
-    def _pick_filler(self, user_text: str) -> str:
-        """Pick a thinking filler based on input length."""
-        length = len(user_text)
-        if length < 20:
-            # Short question — minimal filler
-            return random.choice(["Sure!", "Yep!", "Mm-hmm.", "Oh yeah."])
-        elif length < 80:
-            return random.choice(THINKING_FILLERS)
-        else:
-            # Long/complex question
-            return random.choice([
-                "Ooh, that's a good one. Let me think about that.",
-                "Okay, let me put something together for you.",
-                "That's a great question. Give me a moment.",
-                "Hmm, let me think through this one.",
-            ])
 
     def _try_flush(self, buffer: str, min_chars: int) -> tuple[str, str] | None:
         search_region = buffer[:CHUNK_MAX_CHARS]
