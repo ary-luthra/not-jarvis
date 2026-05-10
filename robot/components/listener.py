@@ -3,12 +3,15 @@
 State machine (never blocks):
   - idle: raw mic → VAD → detect speech → record → transcribe → publish
   - thinking: wait (Brain is working)
-  - speaking: mute (skip VAD to avoid self-echo)
-             TODO: add hotword detection here for interruption
+  - speaking: listen for hotword via openwakeword; on detection, stop robot
+              and record the new prompt
+  - interrupted: transient — hotword fired, recording new prompt
 
 Publishes:
   - state_bus: StateChange("listening") when user starts speaking
-  - input_bus: transcribed text for Brain
+  - state_bus: StateChange("interrupted") when hotword fires during playback
+  - input_bus: transcribed text for Brain (str for normal, dict with
+               interrupted=True for hotword-triggered prompts)
 
 Subscribes:
   - state_bus: knows current pipeline state
@@ -39,12 +42,17 @@ SILENCE_THRESHOLD_S = 0.6
 MIN_SPEECH_S = 0.3
 
 
+HOTWORD_CHUNK = 1280  # 80ms at 16kHz — required frame size for openwakeword
+HOTWORD_MODEL = "hey_jarvis"
+
+
 class Listener(Component):
     def __init__(
         self,
         state_bus: Bus,
         input_bus: Bus,
         whisper_model_size: str = "base.en",
+        hotword_threshold: float = 0.5,
     ):
         super().__init__("listener")
         self._state_q = state_bus.subscribe()
@@ -52,8 +60,10 @@ class Listener(Component):
         self.input_bus = input_bus
         self._current_state = "idle"
         self._whisper_model_size = whisper_model_size
+        self._hotword_threshold = hotword_threshold
         self._vad_model = None
         self._whisper_model = None
+        self._hotword_model = None
 
     def _load_models(self):
         logger.info("[listener] loading Silero VAD...")
@@ -68,6 +78,12 @@ class Listener(Component):
         self._whisper_model = WhisperModel(
             self._whisper_model_size, compute_type="int8", device="cpu"
         )
+
+        logger.info("[listener] loading openwakeword...")
+        from openwakeword.model import Model as WakeWordModel
+        self._hotword_model = WakeWordModel(
+            wakeword_models=[HOTWORD_MODEL], inference_framework="onnx"
+        )
         logger.info("[listener] models loaded")
 
     def run(self):
@@ -77,9 +93,16 @@ class Listener(Component):
             self._drain_state()
 
             if self._current_state == "speaking":
-                # Mute — skip VAD to avoid hearing ourselves
-                # TODO: add hotword detection ("stop", "hey") here
-                time.sleep(0.1)
+                fired = self._listen_for_hotword()
+                if fired:
+                    audio = self._record_until_silence()
+                    if audio:
+                        text = self._transcribe(audio)
+                        if text:
+                            logger.info(f'[listener] interrupt heard: "{text}"')
+                            self._current_state = "thinking"
+                            self.state_bus.put(StateChange(state="thinking"))
+                            self.input_bus.put({"text": text, "interrupted": True})
                 continue
 
             if self._current_state == "thinking":
@@ -100,6 +123,35 @@ class Listener(Component):
             self._current_state = "thinking"
             self.state_bus.put(StateChange(state="thinking"))
             self.input_bus.put(text)
+
+    def _listen_for_hotword(self) -> bool:
+        """Open mic and listen for hotword while robot is speaking. Returns True if hotword fired."""
+        audio_q = stdlib_queue.Queue()
+
+        def callback(indata, frames, time_info, status):
+            audio_q.put(indata[:, 0].copy())
+
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
+                            dtype="float32", blocksize=HOTWORD_CHUNK,
+                            callback=callback):
+            while self.running:
+                self._drain_state()
+                if self._current_state != "speaking":
+                    return False  # robot finished speaking naturally
+
+                try:
+                    chunk = audio_q.get(timeout=0.1)
+                except stdlib_queue.Empty:
+                    continue
+
+                score = self._hotword_model.predict(chunk).get(HOTWORD_MODEL, 0)
+                if score > self._hotword_threshold:
+                    logger.info(f"[listener] hotword detected (score={score:.2f})")
+                    self.state_bus.put(StateChange(state="interrupted"))
+                    self._current_state = "interrupted"
+                    return True
+
+        return False
 
     def _drain_state(self):
         while not self._state_q.empty():
