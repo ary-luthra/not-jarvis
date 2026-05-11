@@ -52,7 +52,7 @@ class Listener(Component):
         state_bus: Bus,
         input_bus: Bus,
         whisper_model_size: str = "base.en",
-        hotword_threshold: float = 0.5,
+        hotword_threshold: float = 0.8,
     ):
         super().__init__("listener")
         self._state_q = state_bus.subscribe()
@@ -81,6 +81,8 @@ class Listener(Component):
 
         logger.info("[listener] loading openwakeword...")
         from openwakeword.model import Model as WakeWordModel
+        from openwakeword.utils import download_models
+        download_models([HOTWORD_MODEL])
         self._hotword_model = WakeWordModel(
             wakeword_models=[HOTWORD_MODEL], inference_framework="onnx"
         )
@@ -132,7 +134,7 @@ class Listener(Component):
             audio_q.put(indata[:, 0].copy())
 
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS,
-                            dtype="float32", blocksize=HOTWORD_CHUNK,
+                            dtype="int16", blocksize=HOTWORD_CHUNK,
                             callback=callback):
             while self.running:
                 self._drain_state()

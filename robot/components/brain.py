@@ -50,7 +50,6 @@ INTERRUPT_ACKS = [
 ]
 
 
-
 class Brain(Component):
     def __init__(
         self,

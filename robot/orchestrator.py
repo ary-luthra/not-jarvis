@@ -27,7 +27,7 @@ class Orchestrator:
         text_mode: bool = False,
         mini=None,
         current_user: str = "aryan",
-        hotword_threshold: float = 0.5,
+        hotword_threshold: float = 0.8,
     ):
         # Buses
         self.input_bus = Bus()
